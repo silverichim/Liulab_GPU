@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 
 // ─── Supabase config ──────────────────────────────────────────────────────────
 const SB_URL = "https://oefdzhzhjvodfnlnuxli.supabase.co";
@@ -61,11 +61,13 @@ const toDbRes = (r) => ({
   id: r.id, name: r.name, is_phd: r.isPhD, project: r.project,
   infra_type: r.infraType, partitions: r.partitions, server_id: r.serverId,
   start_time: r.startTime, end_time: r.endTime,
+  gpu_count: r.gpuCount ? parseInt(r.gpuCount) : null,
 });
 const fromDbRes = (r) => ({
   id: r.id, name: r.name, isPhD: r.is_phd, project: r.project,
   infraType: r.infra_type, partitions: r.partitions || [], serverId: r.server_id,
   startTime: r.start_time, endTime: r.end_time,
+  gpuCount: r.gpu_count,
 });
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -449,10 +451,11 @@ function ReserveModal({ roster, projects, partitions, servers, reservations, pre
   const [infraType, setInfraType] = useState(prefill?.infraType||"slurm");
   const [selParts, setSelParts]   = useState(prefill?.partitions||[partitions[0]?.id||""]);
   const [serverId, setServerId]   = useState(prefill?.serverId||(servers[0]?.id||""));
-  const [gpuCount, setGpuCount]   = useState("");
-  const [dateStr, setDateStr]     = useState(new Date().toISOString().slice(0,10));
-  const [timeStr, setTimeStr]     = useState("09:00");
-  const [duration, setDuration]   = useState(4);
+  const locked = !!prefill?.lockFields;
+  const [gpuCount, setGpuCount]   = useState(locked ? "1" : "");
+  const [dateStr, setDateStr]     = useState(prefill?.startDate || new Date().toISOString().slice(0,10));
+  const [timeStr, setTimeStr]     = useState(prefill?.startTime || "09:00");
+  const [duration, setDuration]   = useState(locked ? 1 : 4);
   const [saving, setSaving]       = useState(false);
   const [err, setErr]             = useState("");
   const isPhD   = matchPhD(name, roster);
@@ -502,19 +505,37 @@ function ReserveModal({ roster, projects, partitions, servers, reservations, pre
             ))}
           </div>
         </Field>
-        <Field label="Resource type">
-          <div style={{display:"flex",border:"0.5px solid var(--border)",borderRadius:8,overflow:"hidden"}}>
-            {["slurm","server"].map((t,i)=>(
-              <button key={t} onClick={()=>setInfraType(t)} style={{
-                flex:1,padding:"7px 6px",fontSize:12,fontWeight:500,textAlign:"center",cursor:"pointer",
-                color:infraType===t?"#085041":"var(--muted)",
-                background:infraType===t?"#E1F5EE":"var(--surface)",
-                border:"none",borderRight:i===0?"0.5px solid var(--border)":"none",fontFamily:"inherit"
-              }}>{t==="slurm"?"Slurm cluster":"Independent server"}</button>
-            ))}
-          </div>
-        </Field>
-        {infraType==="slurm"?(
+        {!locked && (
+          <Field label="Resource type">
+            <div style={{display:"flex",border:"0.5px solid var(--border)",borderRadius:8,overflow:"hidden"}}>
+              {["slurm","server"].map((t,i)=>(
+                <button key={t} onClick={()=>setInfraType(t)} style={{
+                  flex:1,padding:"7px 6px",fontSize:12,fontWeight:500,textAlign:"center",cursor:"pointer",
+                  color:infraType===t?"#085041":"var(--muted)",
+                  background:infraType===t?"#E1F5EE":"var(--surface)",
+                  border:"none",borderRight:i===0?"0.5px solid var(--border)":"none",fontFamily:"inherit"
+                }}>{t==="slurm"?"Slurm cluster":"Independent server"}</button>
+              ))}
+            </div>
+          </Field>
+        )}
+        {locked ? (
+          <Field label="Partition">
+            <div style={{
+              display:"flex", alignItems:"center", gap:8,
+              padding:"8px 12px", borderRadius:8,
+              background:"var(--surface)", border:"0.5px solid var(--border)",
+            }}>
+              <span style={{
+                fontSize:13, fontWeight:600, fontFamily:"monospace",
+                color: HEATMAP_COLORS[selParts[0]]?.hex || "var(--fg)",
+              }}>
+                {partitions.find(p=>p.id===selParts[0])?.name || selParts[0]}
+              </span>
+              <span style={{fontSize:11, color:"var(--muted2)"}}>— from selection</span>
+            </div>
+          </Field>
+        ) : infraType==="slurm" ? (
           <Field label="Partition">
             <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:6}}>
               {partitions.map(p=>(
@@ -535,21 +556,29 @@ function ReserveModal({ roster, projects, partitions, servers, reservations, pre
             </select>
           </Field>
         )}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:10}}>
+        <div style={{display:"grid",gridTemplateColumns:"2fr 1.4fr 0.8fr 0.8fr",gap:8}}>
           <Field label="Date" noMargin>
             <input type="date" value={dateStr} min={new Date().toISOString().slice(0,10)}
-              onChange={e=>setDateStr(e.target.value)} style={{width:"100%",...inp()}}/>
+              onChange={e=>setDateStr(e.target.value)} style={{width:"100%",...inp(),padding:"8px 6px",fontSize:13}}/>
           </Field>
           <Field label="Time" noMargin>
-            <input type="time" value={timeStr} onChange={e=>setTimeStr(e.target.value)} style={{width:"100%",...inp()}}/>
+            <input type="time" value={timeStr} onChange={e=>setTimeStr(e.target.value)} style={{width:"100%",...inp(),padding:"8px 6px",fontSize:13}}/>
           </Field>
           <Field label="Hours" noMargin>
-            <input type="number" min={0.5} max={48} step={0.5} value={duration}
-              onChange={e=>setDuration(parseFloat(e.target.value)||1)} style={{width:"100%",...inp()}}/>
+            {locked ? (
+              <div style={{width:"100%", padding:"8px 6px", fontSize:13, border:"0.5px solid var(--border)", borderRadius:8, background:"var(--surface)", color:"var(--muted2)", textAlign:"center", userSelect:"none", boxSizing:"border-box"}}>1 h</div>
+            ) : (
+              <input type="number" min={0.5} max={48} step={0.5} value={duration}
+                onChange={e=>setDuration(parseFloat(e.target.value)||1)} style={{width:"100%",...inp(),padding:"8px 6px",fontSize:13}}/>
+            )}
           </Field>
-          <Field label={<>GPUs {infraType==="slurm"&&<Opt/>}</>} noMargin>
-            <input type="number" min={1} max={64} value={gpuCount}
-              onChange={e=>setGpuCount(e.target.value)} placeholder="—" style={{width:"100%",...inp()}}/>
+          <Field label="GPU no." noMargin>
+            {locked ? (
+              <div style={{width:"100%", padding:"8px 6px", fontSize:13, border:"0.5px solid var(--border)", borderRadius:8, background:"var(--surface)", color:"var(--muted2)", textAlign:"center", userSelect:"none", boxSizing:"border-box"}}>1</div>
+            ) : (
+              <input type="number" min={1} max={64} value={gpuCount}
+                onChange={e=>setGpuCount(e.target.value)} placeholder="—" style={{width:"100%",...inp(),padding:"8px 6px",fontSize:13}}/>
+            )}
           </Field>
         </div>
 
@@ -589,7 +618,9 @@ function ReserveModal({ roster, projects, partitions, servers, reservations, pre
 }
 
 // ─── Resource card ────────────────────────────────────────────────────────────
-function ResourceCard({ title, titleMono, spec, hardware, note, gpuTotal, status, jobs, upcoming, onCheckin, onReserve, onCheckout }) {
+// hideCheckin=true  → partition cards: always show Reserve, no Check in
+// hideCheckin=false → server cards:   show Check in + Reserve when free (original)
+function ResourceCard({ title, titleMono, hardware, note, gpuTotal, status, jobs, upcoming, onCheckin, onReserve, onCheckout, hideCheckin, partitionColor }) {
   const S = {
     free: { dot:"#22c55e", label:"Free",     border:"var(--border)", bg:"var(--bg)" },
     busy: { dot:"#f97316", label:"In use",   border:"#fed7aa",       bg:"#fff7ed"  },
@@ -598,13 +629,22 @@ function ResourceCard({ title, titleMono, spec, hardware, note, gpuTotal, status
   const s = S[status];
   const usedGPU = jobs.reduce((a,j)=>a+(parseInt(j.gpuCount)||0),0);
   const pct = gpuTotal ? Math.min(Math.round((usedGPU/gpuTotal)*100),100) : 0;
+  // When a partitionColor is provided, override bg/border with a tinted variant
+  const cardBg     = partitionColor && status === "free" ? `${partitionColor}0D` : s.bg;
+  const cardBorder = partitionColor ? `${partitionColor}55` : s.border;
+  const barColor   = partitionColor || (pct>=100?"#ef4444":pct>=75?"#f97316":"#AFA9EC");
 
   return (
-    <div style={{background:s.bg,border:`0.5px solid ${s.border}`,borderRadius:12,padding:"14px 16px",
-      boxShadow:status==="over"?"0 0 0 2px #fca5a580":"none"}}>
+    <div style={{
+      background: cardBg,
+      border: `0.5px solid ${cardBorder}`,
+      borderLeft: partitionColor ? `3px solid ${partitionColor}` : `0.5px solid ${cardBorder}`,
+      borderRadius:12, padding:"14px 16px",
+      boxShadow: status==="over" ? "0 0 0 2px #fca5a580" : "none",
+    }}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:gpuTotal?6:8}}>
         <div>
-          <div style={{fontSize:14,fontWeight:500,fontFamily:titleMono?"monospace":"inherit"}}>{title}</div>
+          <div style={{fontSize:14,fontWeight:500,fontFamily:titleMono?"monospace":"inherit",color:partitionColor||"var(--fg)"}}>{title}</div>
           <div style={{display:"flex",alignItems:"center",gap:5,marginTop:3,flexWrap:"wrap"}}>
             {hardware && (
               <span style={{fontFamily:"monospace",background:"var(--surface)",
@@ -613,7 +653,6 @@ function ResourceCard({ title, titleMono, spec, hardware, note, gpuTotal, status
                 {hardware}
               </span>
             )}
-            <span style={{fontSize:11,color:"var(--muted2)"}}>{spec}</span>
           </div>
           {note && (
             <div style={{fontSize:10,color:"var(--muted2)",marginTop:3,fontStyle:"italic"}}>
@@ -639,7 +678,7 @@ function ResourceCard({ title, titleMono, spec, hardware, note, gpuTotal, status
           <div style={{background:"var(--surface)",borderRadius:4,height:5,overflow:"hidden"}}>
             <div style={{
               width:`${pct}%`,height:"100%",borderRadius:4,transition:"width .3s",
-              background: pct>=100?"#ef4444":pct>=75?"#f97316":"#AFA9EC"
+              background: barColor
             }}/>
           </div>
         </div>
@@ -674,97 +713,651 @@ function ResourceCard({ title, titleMono, spec, hardware, note, gpuTotal, status
         </div>
       ))}
 
-      {upcoming&&jobs.length===0&&(
+      {/* Upcoming reservation notice */}
+      {upcoming && jobs.length === 0 && (
         <div style={{fontSize:11,color:"#534AB7",marginBottom:8}}>
           📅 {upcoming.name} at {fmt(upcoming.startTime)}
         </div>
       )}
 
-      {jobs.length===0&&(
-        <div style={{display:"flex",gap:6}}>
-          <button onClick={onCheckin} style={{flex:2,padding:"6px 0",fontSize:12,fontWeight:500,
-            borderRadius:7,border:"0.5px solid #AFA9EC",background:"#EEEDFE",color:"#3C3489",cursor:"pointer"}}>
-            Check in
-          </button>
-          <button onClick={onReserve} style={{flex:1,padding:"6px 0",fontSize:12,fontWeight:500,
-            borderRadius:7,border:"0.5px solid var(--border)",background:"var(--surface)",
-            color:"var(--muted)",cursor:"pointer"}}>Reserve</button>
-        </div>
+      {/* Action buttons */}
+      {hideCheckin ? (
+        // Partition card: always show Reserve
+        <button onClick={onReserve} style={{
+          width:"100%", padding:"6px 0", fontSize:12, fontWeight:500,
+          borderRadius:7, border:"0.5px solid var(--border)",
+          background:"var(--surface)", color:"var(--muted)", cursor:"pointer",
+          marginTop: jobs.length > 0 ? 8 : 0,
+        }}>Reserve</button>
+      ) : (
+        // Server card: show both when free
+        jobs.length === 0 && (
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={onCheckin} style={{flex:2,padding:"6px 0",fontSize:12,fontWeight:500,
+              borderRadius:7,border:"0.5px solid #AFA9EC",background:"#EEEDFE",color:"#3C3489",cursor:"pointer"}}>
+              Check in
+            </button>
+            <button onClick={onReserve} style={{flex:1,padding:"6px 0",fontSize:12,fontWeight:500,
+              borderRadius:7,border:"0.5px solid var(--border)",background:"var(--surface)",
+              color:"var(--muted)",cursor:"pointer"}}>Reserve</button>
+          </div>
+        )
       )}
     </div>
   );
 }
 
+// ─── Heatmap Calendar ────────────────────────────────────────────────────────
+const HEATMAP_COLORS = {
+  // full-prefix variants
+  "drjieliu-a100": { hex:"#EF4444" },
+  "drjieliu-h100": { hex:"#3B82F6" },
+  "drjieliu-l40s": { hex:"#F59E0B" },
+  "drjieliu-v100": { hex:"#A855F7" },
+  "drjieliu-h200": { hex:"#22C55E" },
+  // short-name variants (actual DB IDs)
+  "a100": { hex:"#EF4444" }, // red
+  "h100": { hex:"#3B82F6" }, // blue
+  "l40s": { hex:"#F59E0B" }, // amber
+  "v100": { hex:"#A855F7" }, // purple
+  "h200": { hex:"#22C55E" }, // green
+};
+
+function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onReserve }) {
+  const [dayOffset, setDayOffset]         = useState(0);
+  const [popup, setPopup]                 = useState(null); // { partId, hour, x, y }
+  const [cancelConfirm, setCancelConfirm] = useState(null); // { hrs, partId, hour }
+
+  const GPU_ROW_H_MIN = 18;
+  const PART_LABEL_W  = 78;
+  const GPU_LABEL_W   = 30;
+  const HOUR_COL_W    = 40;
+  const HEADER_H      = 44;
+
+  const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+  // Close popup on Escape
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") { setPopup(null); setCancelConfirm(null); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const displayDate = new Date();
+  displayDate.setDate(displayDate.getDate() + dayOffset);
+  displayDate.setHours(0, 0, 0, 0);
+  const dayStart = displayDate.getTime();
+  const dayEnd   = dayStart + 86400000;
+  const isToday  = dayOffset === 0;
+  const dateLabel = `${MONTH_NAMES[displayDate.getMonth()]} ${String(displayDate.getDate()).padStart(2,"0")} ${displayDate.getFullYear()}`;
+
+  // Reservations touching this day (slurm only)
+  const dayRes = reservations.filter(r =>
+    r.infraType === "slurm" && r.startTime < dayEnd && r.endTime > dayStart
+  );
+
+  const getReservedCount = (partId, hour) => {
+    const hStart = dayStart + hour * 3600000;
+    const hEnd   = hStart + 3600000;
+    return dayRes
+      .filter(r => (r.partitions||[]).includes(partId) && r.startTime < hEnd && r.endTime > hStart)
+      .reduce((sum, r) => sum + (parseInt(r.gpuCount)||0), 0);
+  };
+
+  const getHourRes = (partId, hour) => {
+    const hStart = dayStart + hour * 3600000;
+    const hEnd   = hStart + 3600000;
+    return dayRes.filter(r =>
+      (r.partitions||[]).includes(partId) && r.startTime < hEnd && r.endTime > hStart
+    );
+  };
+
+  // Compute absolute grid rows per partition (1-indexed; row 1 = header)
+  let rowCursor = 2;
+  const partRows = partitions.map(p => {
+    const rowStart = rowCursor;
+    rowCursor += (p.gpuTotal || 0);
+    return { ...p, rowStart, rowEnd: rowCursor };
+  });
+  const totalDataRows = rowCursor - 2;
+
+  // CSS-only fill: minmax lets rows shrink to GPU_ROW_H_MIN but stretch via 1fr to fill height
+  const gridTemplateColumns = `${PART_LABEL_W}px ${GPU_LABEL_W}px repeat(24, ${HOUR_COL_W}px)`;
+  const gridTemplateRows    = `${HEADER_H}px repeat(${totalDataRows}, minmax(${GPU_ROW_H_MIN}px, 1fr))`;
+  const gridTotalW          = PART_LABEL_W + GPU_LABEL_W + 24 * HOUR_COL_W;
+
+  // Hour range label (24h)
+  const fmtHourRange = (h) =>
+    `${String(h).padStart(2,"0")}:00 – ${String(h + 1).padStart(2,"0")}:00`;
+
+  const navBtn = (label, fn) => (
+    <button onClick={fn} style={{
+      padding:"3px 10px", fontSize:14, lineHeight:1, fontWeight:400,
+      borderRadius:6, border:"0.5px solid var(--border)",
+      background:"var(--bg)", color:"var(--muted)", cursor:"pointer",
+      fontFamily:"inherit",
+    }}>{label}</button>
+  );
+
+  return (
+    <div
+      style={{
+        display:"flex", flexDirection:"column",
+        background:"var(--bg)", border:"0.5px solid var(--border)",
+        borderRadius:12, overflow:"hidden",
+        height:"calc(100vh - 88px)",
+      }}
+      onClick={() => setPopup(null)}
+    >
+      {/* ── Title / day navigation ── */}
+      <div style={{
+        padding:"8px 14px", borderBottom:"0.5px solid var(--border)",
+        background:"var(--surface)", flexShrink:0,
+        display:"flex", alignItems:"center", justifyContent:"space-between",
+      }}>
+        <div style={{fontSize:13, fontWeight:500}}>GPU Reservation Heatmap</div>
+        <div style={{display:"flex", alignItems:"center", gap:8}}>
+          {navBtn("‹", () => setDayOffset(x => x - 1))}
+          <div style={{
+            fontSize:12, fontWeight:600,
+            color: isToday ? "#3C3489" : "var(--fg)",
+            minWidth:108, textAlign:"center", userSelect:"none",
+            padding:"3px 10px", borderRadius:6,
+            background: isToday ? "#EEEDFE" : "transparent",
+          }}>{dateLabel}</div>
+          {navBtn("›", () => setDayOffset(x => x + 1))}
+          {dayOffset !== 0 && (
+            <button onClick={() => setDayOffset(0)} style={{
+              padding:"3px 9px", fontSize:11, fontWeight:500,
+              borderRadius:6, border:"0.5px solid #AFA9EC",
+              background:"#EEEDFE", color:"#3C3489", cursor:"pointer",
+              fontFamily:"inherit",
+            }}>Today</button>
+          )}
+        </div>
+      </div>
+
+      {/* ── Legend ── */}
+      <div style={{
+        padding:"6px 14px", borderBottom:"0.5px solid var(--border)",
+        background:"var(--surface)", flexShrink:0,
+        display:"flex", alignItems:"center", gap:14, flexWrap:"wrap",
+      }}>
+        <span style={{fontSize:10, fontWeight:500, textTransform:"uppercase",
+          letterSpacing:".05em", color:"var(--muted2)"}}>Legend</span>
+        {partitions.map(p => {
+          const c = HEATMAP_COLORS[p.id] || { hex:"#999" };
+          return (
+            <div key={p.id} style={{display:"flex", alignItems:"center", gap:5}}>
+              <div style={{width:12, height:12, borderRadius:2, background:c.hex}}/>
+              <span style={{fontSize:11, fontWeight:600, fontFamily:"monospace",
+                color:"var(--muted)"}}>{p.name}</span>
+              <span style={{fontSize:10, color:"var(--muted2)"}}>×{p.gpuTotal}</span>
+            </div>
+          );
+        })}
+        <div style={{
+          marginLeft:"auto", display:"flex", alignItems:"center",
+          gap:3, fontSize:10, color:"var(--muted2)",
+        }}>
+          <span>0</span>
+          {[0.15, 0.35, 0.6, 0.8, 1.0].map((op, i) => (
+            <div key={i} style={{
+              width:13, height:13, borderRadius:2,
+              background:`rgba(120,120,120,${op})`,
+            }}/>
+          ))}
+          <span>full</span>
+        </div>
+      </div>
+
+      {/* ── Heatmap grid ── */}
+      <div style={{flex:1, overflow:"auto", display:"flex", flexDirection:"column"}}>
+        <div style={{
+          display:"grid",
+          gridTemplateColumns,
+          gridTemplateRows,
+          width: gridTotalW,
+          minHeight:"100%",
+          flexShrink:0,
+        }}>
+
+          {/* Header: corner cells + 24 hour labels */}
+          <div style={{
+            gridRow:1, gridColumn:1,
+            position:"sticky", top:0, left:0, zIndex:32,
+            background:"var(--surface)",
+            borderRight:"0.5px solid var(--border)",
+            borderBottom:"0.5px solid var(--border)",
+            display:"flex", alignItems:"center", justifyContent:"center",
+            fontSize:9, color:"var(--muted2)", textTransform:"uppercase", letterSpacing:".04em",
+          }}>Partition</div>
+          <div style={{
+            gridRow:1, gridColumn:2,
+            position:"sticky", top:0, left:PART_LABEL_W, zIndex:31,
+            background:"var(--surface)",
+            borderRight:"0.5px solid var(--border)",
+            borderBottom:"0.5px solid var(--border)",
+            display:"flex", alignItems:"center", justifyContent:"center",
+            fontSize:9, color:"var(--muted2)", textTransform:"uppercase", letterSpacing:".04em",
+          }}>GPU</div>
+          {Array.from({length:24}, (_, h) => (
+            <div key={h} style={{
+              gridRow:1, gridColumn: 3 + h,
+              position:"sticky", top:0, zIndex:30,
+              background:"var(--surface)",
+              borderLeft:"0.5px solid var(--border)",
+              borderBottom:"0.5px solid var(--border)",
+              display:"flex", flexDirection:"column",
+              alignItems:"center", justifyContent:"center",
+              fontSize:9, color:"var(--muted2)", lineHeight:1.4, userSelect:"none",
+            }}>
+              <span style={{fontWeight:700}}>{String(h).padStart(2,"0")}:00</span>
+              <span style={{opacity:0.7}}>{h < 12 ? "AM" : "PM"}</span>
+            </div>
+          ))}
+
+          {/* Data rows */}
+          {partRows.flatMap(p => {
+            const color   = HEATMAP_COLORS[p.id] || { hex:"#888" };
+            const gpuList = Array.from({length: p.gpuTotal || 0}, (_, i) => i);
+            const isFirstPart = p.rowStart === 2;
+            const partTopBorder = isFirstPart ? "none" : `1.5px solid ${color.hex}66`;
+
+            return [
+              // ── Partition label cell (spans all GPU rows for this partition) ──
+              <div key={`lbl-${p.id}`} style={{
+                gridRow: `${p.rowStart} / ${p.rowEnd}`,
+                gridColumn: 1,
+                position:"sticky", left:0, zIndex:20,
+                background: `${color.hex}14`,
+                borderRight:"0.5px solid var(--border)",
+                borderTop: partTopBorder,
+                display:"flex", flexDirection:"column",
+                alignItems:"center", justifyContent:"center", gap:3,
+                boxSizing:"border-box",
+              }}>
+                <div style={{
+                  fontSize:11, fontWeight:700, fontFamily:"monospace",
+                  color: color.hex, textAlign:"center", lineHeight:1.2,
+                }}>{p.name}</div>
+                <div style={{
+                  fontSize:9, color:"var(--muted2)", textAlign:"center",
+                }}>×{p.gpuTotal}</div>
+              </div>,
+
+              // ── Per-GPU rows ──
+              ...gpuList.flatMap(ri => {
+                const isFirstRow = ri === 0;
+                const isLastRow  = ri === gpuList.length - 1;
+                const absRow     = p.rowStart + ri;
+                const rowTopBorder = isFirstRow ? partTopBorder : "0.5px solid rgba(0,0,0,0.05)";
+                const rowBotBorder = isLastRow  ? "0.5px solid var(--border)" : "none";
+
+                return [
+                  // GPU index label
+                  <div key={`gpu-${p.id}-${ri}`} style={{
+                    gridRow: absRow, gridColumn: 2,
+                    position:"sticky", left: PART_LABEL_W, zIndex:19,
+                    background:"var(--surface)",
+                    borderRight:"0.5px solid var(--border)",
+                    borderTop: rowTopBorder, borderBottom: rowBotBorder,
+                    display:"flex", alignItems:"center", justifyContent:"center",
+                    boxSizing:"border-box",
+                    fontSize:9, color:"var(--muted2)", fontFamily:"monospace",
+                  }}>G{ri + 1}</div>,
+
+                  // 24 hour cells
+                  ...Array.from({length:24}, (_, h) => {
+                    const reserved = getReservedCount(p.id, h);
+                    const clamped  = Math.min(reserved, p.gpuTotal);
+                    const filled   = ri < clamped;
+
+                    const isSelected = popup?.partId === p.id && popup?.hour === h && popup?.ri === ri;
+
+                    return (
+                      <div
+                        key={`cell-${p.id}-${ri}-${h}`}
+                        onClick={e => {
+                          e.stopPropagation();
+                          const rect   = e.currentTarget.getBoundingClientRect();
+                          const popupW = 226;
+                          const xPos   = rect.right + popupW > window.innerWidth
+                            ? rect.left - popupW - 4
+                            : rect.right + 4;
+                          const yPos = Math.min(rect.top, window.innerHeight - 260);
+                          setPopup({ partId: p.id, hour: h, ri, filled, x: xPos, y: yPos });
+                        }}
+                        style={{
+                          gridRow: absRow, gridColumn: 3 + h,
+                          boxSizing:"border-box",
+                          background: filled ? color.hex : "transparent",
+                          opacity: filled ? 0.82 : 1,
+                          borderLeft:"0.5px solid rgba(0,0,0,0.05)",
+                          borderTop: rowTopBorder,
+                          borderBottom: rowBotBorder,
+                          cursor: "pointer",
+                          transition:"opacity .12s",
+                          outline: isSelected ? `2px solid ${color.hex}` : "none",
+                          outlineOffset: "-1px",
+                          position: "relative",
+                          zIndex: isSelected ? 3 : "auto",
+                        }}
+                      />
+                    );
+                  }),
+                ];
+              }),
+            ];
+          })}
+        </div>
+      </div>
+
+      {/* ── Cell popup ── */}
+      {popup && (() => {
+        const part    = partitions.find(p => p.id === popup.partId);
+        const color   = HEATMAP_COLORS[popup.partId] || { hex:"#888" };
+        const hrs     = getHourRes(popup.partId, popup.hour);
+        const hasRes  = hrs.length > 0;
+        // button states: based on whether the clicked cell itself was filled
+        const cellFilled = popup.filled;
+
+        const dateStr = (() => {
+          const d = new Date(dayStart);
+          return `${MONTH_NAMES[d.getMonth()]} ${String(d.getDate()).padStart(2,"0")} ${d.getFullYear()}`;
+        })();
+        const timeStr = `${String(popup.hour).padStart(2,"0")}:00`;
+
+        return (
+          <div onClick={e => e.stopPropagation()} style={{
+            position:"fixed", top: popup.y, left: popup.x, width:224,
+            background:"var(--bg)", border:"0.5px solid var(--border)",
+            borderRadius:12, padding:"12px 14px",
+            boxShadow:"0 6px 24px rgba(0,0,0,0.14)", zIndex:300,
+          }}>
+            {/* Header */}
+            <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:10}}>
+              <div style={{
+                width:9, height:9, borderRadius:2, background:color.hex, flexShrink:0,
+              }}/>
+              <div style={{fontSize:12, fontWeight:700, fontFamily:"monospace", color:color.hex}}>
+                {part?.name}
+              </div>
+              <div style={{fontSize:11, color:"var(--muted2)", marginLeft:"auto", textAlign:"right", lineHeight:1.4}}>
+                <div style={{fontWeight:500, color:"var(--fg)"}}>{dateStr}</div>
+                <div>{fmtHourRange(popup.hour)}</div>
+              </div>
+            </div>
+
+            {/* Reservation list */}
+            {hasRes ? (
+              <div style={{
+                background:"var(--surface)", borderRadius:8,
+                padding:"8px 10px", marginBottom:10,
+              }}>
+                {hrs.map((r, i) => (
+                  <div key={r.id} style={{
+                    marginBottom: i < hrs.length - 1 ? 7 : 0,
+                    paddingBottom: i < hrs.length - 1 ? 7 : 0,
+                    borderBottom: i < hrs.length - 1 ? "0.5px solid var(--border)" : "none",
+                  }}>
+                    <div style={{display:"flex", alignItems:"center", gap:5, flexWrap:"wrap", marginBottom:3}}>
+                      {r.project && (
+                        <span style={{
+                          fontSize:10, fontWeight:600, padding:"2px 6px",
+                          borderRadius:4, background:`${color.hex}22`,
+                          color: color.hex, fontFamily:"monospace", letterSpacing:"0.02em",
+                        }}>{r.project}</span>
+                      )}
+                      <div style={{fontSize:12, fontWeight:500, color:"var(--fg)"}}>
+                        {r.name}{r.gpuCount ? <span style={{color:"var(--muted2)", fontWeight:400}}> · {r.gpuCount} GPU</span> : ""}
+                      </div>
+                    </div>
+                    <div style={{fontSize:10, color:"var(--muted2)"}}>
+                      {fmt(r.startTime)} – {fmt(r.endTime)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{
+                fontSize:11, color:"var(--muted2)", textAlign:"center",
+                padding:"10px 0 14px", fontStyle:"italic",
+              }}>Available — no reservations</div>
+            )}
+
+            {/* CTA buttons */}
+            <div style={{display:"flex", gap:7}}>
+              <button
+                disabled={!cellFilled}
+                onClick={() => {
+                  if (!cellFilled) return;
+                  setCancelConfirm({ hrs, partId: popup.partId, hour: popup.hour });
+                  setPopup(null);
+                }}
+                style={{
+                  flex:1, padding:"7px 0", fontSize:12, fontWeight:500,
+                  borderRadius:7, cursor: cellFilled ? "pointer" : "not-allowed",
+                  border: cellFilled ? "0.5px solid #fca5a5" : "0.5px solid var(--border)",
+                  background: cellFilled ? "#FCEBEB" : "var(--surface)",
+                  color: cellFilled ? "#791F1F" : "var(--muted)",
+                  opacity: cellFilled ? 1 : 0.45,
+                  fontFamily:"inherit",
+                }}>Cancel</button>
+              <button
+                disabled={cellFilled}
+                onClick={() => {
+                  if (cellFilled) return;
+                  setPopup(null);
+                  const isoDate = new Date(dayStart).toISOString().slice(0,10);
+                  onReserve({ infraType:"slurm", partitions:[popup.partId], startDate: isoDate, startTime: timeStr, lockFields: true });
+                }}
+                style={{
+                  flex:1, padding:"7px 0", fontSize:12, fontWeight:500,
+                  borderRadius:7, cursor: !cellFilled ? "pointer" : "not-allowed",
+                  border: !cellFilled ? `0.5px solid ${color.hex}88` : "0.5px solid var(--border)",
+                  background: !cellFilled ? `${color.hex}18` : "var(--surface)",
+                  color: !cellFilled ? color.hex : "var(--muted)",
+                  opacity: !cellFilled ? 1 : 0.45,
+                  fontFamily:"inherit",
+                }}>Reserve</button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Cancel confirmation modal ── */}
+      {cancelConfirm && (() => {
+        const part  = partitions.find(p => p.id === cancelConfirm.partId);
+        const color = HEATMAP_COLORS[cancelConfirm.partId] || { hex:"#888" };
+        const confirmDateLabel = (() => {
+          const d = new Date(dayStart);
+          return `${MONTH_NAMES[d.getMonth()]} ${String(d.getDate()).padStart(2,"0")} ${d.getFullYear()}`;
+        })();
+        return (
+          <div
+            onClick={() => setCancelConfirm(null)}
+            style={{
+              position:"fixed", inset:0, background:"rgba(0,0,0,.45)",
+              zIndex:250, display:"flex", alignItems:"center",
+              justifyContent:"center", padding:16,
+            }}
+          >
+            <div onClick={e => e.stopPropagation()} style={{
+              background:"var(--bg)", border:"0.5px solid var(--border)",
+              borderRadius:16, padding:28, width:"100%", maxWidth:420,
+            }}>
+              <div style={{fontSize:17, fontWeight:500, marginBottom:4}}>Cancel reservation?</div>
+              <div style={{
+                display:"flex", alignItems:"center", gap:6,
+                fontSize:12, color:"var(--muted2)", marginBottom:20,
+              }}>
+                <div style={{width:8, height:8, borderRadius:2, background:color.hex, flexShrink:0}}/>
+                <span style={{fontFamily:"monospace", fontWeight:600, color:color.hex}}>{part?.name}</span>
+                <span>·</span>
+                <span style={{fontWeight:500, color:"var(--fg)"}}>{confirmDateLabel}</span>
+                <span>·</span>
+                <span>{fmtHourRange(cancelConfirm.hour)}</span>
+              </div>
+
+              {cancelConfirm.hrs.map(r => (
+                <div key={r.id} style={{
+                  background:"var(--surface)", borderRadius:10,
+                  padding:"12px 14px", marginBottom:10,
+                }}>
+                  <div style={{
+                    display:"flex", justifyContent:"space-between",
+                    alignItems:"flex-start", marginBottom:6,
+                  }}>
+                    <div>
+                      <div style={{fontSize:13, fontWeight:500}}>{r.name}</div>
+                      <div style={{fontSize:11, color:"var(--muted2)", marginTop:2}}>
+                        {r.project}
+                      </div>
+                    </div>
+                    {r.gpuCount && (
+                      <div style={{
+                        fontSize:11, fontWeight:600, fontFamily:"monospace",
+                        background:`${color.hex}18`, color:color.hex,
+                        padding:"2px 7px", borderRadius:5,
+                      }}>{part?.name} ×{r.gpuCount}</div>
+                    )}
+                  </div>
+                  <div style={{fontSize:11, color:"var(--muted)", marginBottom:10}}>
+                    {fmt(r.startTime)} – {fmt(r.endTime)}
+                  </div>
+                  <button
+                    onClick={() => {
+                      onDeleteReservation(r.id);
+                      const remaining = cancelConfirm.hrs.filter(x => x.id !== r.id);
+                      remaining.length > 0
+                        ? setCancelConfirm({ ...cancelConfirm, hrs: remaining })
+                        : setCancelConfirm(null);
+                    }}
+                    style={{
+                      width:"100%", padding:"8px 0", fontSize:12, fontWeight:500,
+                      background:"#FCEBEB", color:"#791F1F",
+                      border:"0.5px solid #fca5a5", borderRadius:7,
+                      cursor:"pointer", fontFamily:"inherit",
+                    }}
+                  >Confirm cancel</button>
+                </div>
+              ))}
+
+              <button onClick={() => setCancelConfirm(null)} style={{
+                width:"100%", padding:"9px 0", fontSize:13, fontWeight:500,
+                borderRadius:8, border:"0.5px solid var(--border)",
+                background:"var(--surface)", color:"var(--muted)",
+                cursor:"pointer", marginTop:4,
+              }}>Back</button>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-function Dashboard({ sessions, reservations, partitions, servers, onCheckin, onCheckout, onReserve }) {
+function Dashboard({ sessions, reservations, partitions, servers, onCheckin, onCheckout, onReserve, onDeleteReservation }) {
   const [tick, setTick] = useState(0);
   useEffect(()=>{const t=setInterval(()=>setTick(x=>x+1),30000);return()=>clearInterval(t);},[]);
 
-  const activeFor  = (f) => sessions.filter(s=>!s.endTime&&f(s));
+  const activeFor   = (f) => sessions.filter(s=>!s.endTime&&f(s));
   const upcomingFor = (f) => reservations.filter(r=>r.startTime>now()&&f(r)).sort((a,b)=>a.startTime-b.startTime)[0];
 
   return (
-    <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-        <div style={{fontSize:20,fontWeight:500}}>Resource status</div>
-        <button onClick={()=>onCheckin(null)} style={{padding:"8px 18px",fontSize:13,fontWeight:500,
-          borderRadius:8,border:"0.5px solid #AFA9EC",background:"#EEEDFE",color:"#3C3489",cursor:"pointer"}}>
-          + Check in
-        </button>
-      </div>
+    <div style={{display:"flex", gap:20, alignItems:"flex-start"}}>
 
-      <div style={{background:"var(--bg)",border:"0.5px solid var(--border)",borderRadius:12,padding:"14px 18px",marginBottom:24,fontSize:12,color:"var(--muted)",lineHeight:1.8}}>
-        <div style={{fontWeight:500,color:"var(--fg)",marginBottom:8,fontSize:13}}>Registration guidelines</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"2px 24px"}}>
-          <div>This system operates on an <span style={{fontWeight:500,color:"var(--fg)"}}>honor system</span> — please fill in your usage honestly and accurately.</div>
-          <div><span style={{fontWeight:500,color:"var(--fg)"}}>Great Lakes is the preferred resource</span> for most workloads. Please use it whenever possible and reserve lab GPUs for jobs that specifically require them.</div>
-          <div><span style={{fontWeight:500,color:"var(--fg)"}}>PhD students have scheduling priority</span> on shared resources. Please be mindful of others when planning long-running jobs.</div>
-          <div><span style={{fontWeight:500,color:"var(--fg)"}}>Trainees:</span> log your GPU usage under your mentor's name, as resource allocation is tracked at the PI/mentor level.</div>
+      {/* ── LEFT PANEL ───────────────────────────────────────────── */}
+      <div style={{flex:"0 0 50%", maxWidth:"50%", minWidth:0}}>
+
+        {/* Top row: label + check in button */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div style={{fontSize:11,fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",color:"var(--muted2)"}}>
+            Resources
+          </div>
+          <button onClick={()=>onCheckin(null)} style={{
+            padding:"6px 14px",fontSize:12,fontWeight:500,
+            borderRadius:7,border:"0.5px solid #AFA9EC",background:"#EEEDFE",color:"#3C3489",cursor:"pointer"
+          }}>+ Check in</button>
         </div>
-        <div style={{marginTop:10,paddingTop:10,borderTop:"0.5px solid var(--border)",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-          <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:500,padding:"2px 8px",borderRadius:20,background:"#FCEBEB",color:"#791F1F"}}>
-            <span style={{width:6,height:6,borderRadius:"50%",background:"#E24B4A",display:"inline-block"}}/>Very Urgent
-          </span>
-          <span style={{fontSize:12,color:"var(--muted)"}}>If you mark a job as Very Urgent, please email Ricky and cc Kai:</span>
-          <a href="mailto:rickyhan@umich.edu?cc=kailiua@umich.edu" style={{fontSize:12,color:"#534AB7",textDecoration:"none",fontWeight:500}}>rickyhan@umich.edu</a>
-          <span style={{fontSize:12,color:"var(--muted2)"}}>cc</span>
-          <a href="mailto:rickyhan@umich.edu?cc=kailiua@umich.edu" style={{fontSize:12,color:"#534AB7",textDecoration:"none",fontWeight:500}}>kailiua@umich.edu</a>
+
+        {/* Registration guidelines */}
+        <div style={{background:"var(--bg)",border:"0.5px solid var(--border)",borderRadius:12,padding:"14px 18px",marginBottom:20,fontSize:12,color:"var(--muted)",lineHeight:1.8}}>
+          <div style={{fontWeight:500,color:"var(--fg)",marginBottom:8,fontSize:13}}>Registration guidelines</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"2px 20px"}}>
+            <div>This system operates on an <span style={{fontWeight:500,color:"var(--fg)"}}>honor system</span> — please fill in your usage honestly and accurately.</div>
+            <div><span style={{fontWeight:500,color:"var(--fg)"}}>Great Lakes is the preferred resource</span> for most workloads. Please use it whenever possible and reserve lab GPUs for jobs that specifically require them.</div>
+            <div><span style={{fontWeight:500,color:"var(--fg)"}}>PhD students have scheduling priority</span> on shared resources. Please be mindful of others when planning long-running jobs.</div>
+            <div><span style={{fontWeight:500,color:"var(--fg)"}}>Trainees:</span> log your GPU usage under your mentor's name, as resource allocation is tracked at the PI/mentor level.</div>
+          </div>
+          <div style={{marginTop:10,paddingTop:10,borderTop:"0.5px solid var(--border)",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:500,padding:"2px 8px",borderRadius:20,background:"#FCEBEB",color:"#791F1F"}}>
+              <span style={{width:6,height:6,borderRadius:"50%",background:"#E24B4A",display:"inline-block"}}/>Very Urgent
+            </span>
+            <span style={{fontSize:12,color:"var(--muted)"}}>If you mark a job as Very Urgent, please email Ricky and cc Kai:</span>
+            <a href="mailto:rickyhan@umich.edu?cc=kailiua@umich.edu" style={{fontSize:12,color:"#534AB7",textDecoration:"none",fontWeight:500}}>rickyhan@umich.edu</a>
+            <span style={{fontSize:12,color:"var(--muted2)"}}>cc</span>
+            <a href="mailto:rickyhan@umich.edu?cc=kailiua@umich.edu" style={{fontSize:12,color:"#534AB7",textDecoration:"none",fontWeight:500}}>kailiua@umich.edu</a>
+          </div>
+        </div>
+
+        {/* Slurm partitions */}
+        <div style={{fontSize:11,fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",
+          color:"var(--muted2)",marginBottom:10}}>Slurm partitions</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:20}}>
+          {partitions.map(p=>{
+            const jobs = activeFor(s=>s.infraType==="slurm"&&(s.partitions||[]).includes(p.id));
+            const upcoming = upcomingFor(r=>r.infraType==="slurm"&&(r.partitions||[]).includes(p.id));
+            const hasOver  = jobs.some(j=>j.plannedEnd&&now()>j.plannedEnd);
+            const status   = jobs.length===0?"free":hasOver?"over":"busy";
+            return <ResourceCard key={p.id} title={p.name} titleMono
+              hardware={p.hardware||null} note={p.note||null}
+              gpuTotal={p.gpuTotal} status={status} jobs={jobs} upcoming={upcoming}
+              onCheckin={()=>onCheckin({infraType:"slurm",partitions:[p.id]})}
+              onReserve={()=>onReserve({infraType:"slurm",partitions:[p.id]})}
+              onCheckout={onCheckout}
+              hideCheckin={true}
+              partitionColor={HEATMAP_COLORS[p.id]?.hex}/>;
+          })}
+        </div>
+
+        {/* Independent servers */}
+        <div style={{fontSize:11,fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",
+          color:"var(--muted2)",marginBottom:10}}>Independent servers</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}}>
+          {servers.map(s=>{
+            const jobs = activeFor(j=>j.infraType==="server"&&j.serverId===s.id);
+            const upcoming = upcomingFor(r=>r.infraType==="server"&&r.serverId===s.id);
+            const hasOver  = jobs.some(j=>j.plannedEnd&&now()>j.plannedEnd);
+            const status   = jobs.length===0?"free":hasOver?"over":"busy";
+            return <ResourceCard key={s.id} title={`${s.name} / ${s.gpu}`} titleMono
+              hardware={s.spec||null} note={null} gpuTotal={null}
+              status={status} jobs={jobs} upcoming={upcoming}
+              onCheckin={()=>onCheckin({infraType:"server",serverId:s.id})}
+              onReserve={()=>onReserve({infraType:"server",serverId:s.id})}
+              onCheckout={onCheckout}
+              hideCheckin={false}/>;
+          })}
         </div>
       </div>
 
-      <div style={{fontSize:11,fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",
-        color:"var(--muted2)",marginBottom:10}}>Slurm partitions</div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,marginBottom:24}}>
-        {partitions.map(p=>{
-          const jobs = activeFor(s=>s.infraType==="slurm"&&(s.partitions||[]).includes(p.id));
-          const upcoming = upcomingFor(r=>r.infraType==="slurm"&&(r.partitions||[]).includes(p.id));
-          const hasOver  = jobs.some(j=>j.plannedEnd&&now()>j.plannedEnd);
-          const status   = jobs.length===0?"free":hasOver?"over":"busy";
-          return <ResourceCard key={p.id} title={p.name} titleMono
-            spec={`${p.gpuTotal} GPUs total`} hardware={p.hardware||null} note={p.note||null}
-            gpuTotal={p.gpuTotal} status={status} jobs={jobs} upcoming={upcoming}
-            onCheckin={()=>onCheckin({infraType:"slurm",partitions:[p.id]})}
-            onReserve={()=>onReserve({infraType:"slurm",partitions:[p.id]})}
-            onCheckout={onCheckout}/>;
-        })}
+      {/* ── RIGHT PANEL — Calendar ───────────────────────────────── */}
+      <div style={{
+        flex:"0 0 calc(50% - 20px)", maxWidth:"calc(50% - 20px)", minWidth:0,
+        position:"sticky", top:57,
+      }}>
+        <HeatmapCalendar
+          reservations={reservations}
+          partitions={partitions}
+          onDeleteReservation={onDeleteReservation}
+          onReserve={onReserve}
+        />
       </div>
 
-      <div style={{fontSize:11,fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",
-        color:"var(--muted2)",marginBottom:10}}>Independent servers</div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:10}}>
-        {servers.map(s=>{
-          const jobs = activeFor(j=>j.infraType==="server"&&j.serverId===s.id);
-          const upcoming = upcomingFor(r=>r.infraType==="server"&&r.serverId===s.id);
-          const hasOver  = jobs.some(j=>j.plannedEnd&&now()>j.plannedEnd);
-          const status   = jobs.length===0?"free":hasOver?"over":"busy";
-          return <ResourceCard key={s.id} title={`${s.name} / ${s.gpu}`} titleMono
-            spec={s.spec} gpuTotal={null}
-            status={status} jobs={jobs} upcoming={upcoming}
-            onCheckin={()=>onCheckin({infraType:"server",serverId:s.id})}
-            onReserve={()=>onReserve({infraType:"server",serverId:s.id})}
-            onCheckout={onCheckout}/>;
-        })}
-      </div>
     </div>
   );
 }
@@ -1191,6 +1784,10 @@ export default function App() {
     setReservations(r=>[...r,data]);
     setShowReserve(false);
   };
+  const handleDeleteReservation = async (id) => {
+    await db.deleteReservation(id);
+    setReservations(r=>r.filter(x=>x.id!==id));
+  };
 
   const TABS = [{id:"dashboard",label:"Dashboard"},{id:"history",label:"History"},
                 {id:"stats",label:"Stats"},{id:"admin",label:"Admin"}];
@@ -1231,7 +1828,7 @@ export default function App() {
       </div>
 
       {/* Body */}
-      <div style={{padding:24,maxWidth:1100,margin:"0 auto"}}>
+      <div style={{padding:24,maxWidth:1400,margin:"0 auto"}}>
         {err&&!loading&&<ErrBanner msg={err}/>}
         {loading ? <Spinner/> : (
           <>
@@ -1239,7 +1836,8 @@ export default function App() {
               partitions={partitions} servers={servers}
               onCheckin={p=>{setCheckinPre(p);setShowCheckin(true);}}
               onCheckout={handleCheckout}
-              onReserve={p=>{setReservePre(p);setShowReserve(true);}}/>}
+              onReserve={p=>{setReservePre(p);setShowReserve(true);}}
+              onDeleteReservation={handleDeleteReservation}/>}
             {tab==="history"&&<History sessions={sessions} servers={servers}
               onExport={()=>csvExport(sessions,servers)}/>}
             {tab==="stats"&&<Stats sessions={sessions}/>}
