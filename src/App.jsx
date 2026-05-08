@@ -193,12 +193,16 @@ function CheckInModal({ roster, projects, partitions, servers, prefill, onConfir
   const isPhD    = matchPhD(name, roster);
   const pm       = PRIORITY_META[priority];
   const endTime  = now() + duration * 3600000;
-  const canSubmit = name.trim() && (infraType==="slurm" ? selParts.length>0 : serverId);
+  const canSubmit = name.trim() && (infraType==="slurm" ? selParts.length>0 : serverId)
+    && (jobType!=="gpu" || (gpuCount>=1));
 
   const togglePart = (p) =>
     setSelParts(prev => prev.includes(p) ? prev.filter(x=>x!==p) : [...prev,p]);
 
   const handleConfirm = async () => {
+    if (jobType === "gpu" && (!gpuCount || gpuCount < 1)) {
+      setErr("GPU count must be at least 1"); return;
+    }
     setSaving(true); setErr("");
     try {
       await onConfirm({
@@ -452,10 +456,10 @@ function ReserveModal({ roster, projects, partitions, servers, reservations, pre
   const [selParts, setSelParts]   = useState(prefill?.partitions||[partitions[0]?.id||""]);
   const [serverId, setServerId]   = useState(prefill?.serverId||(servers[0]?.id||""));
   const locked = !!prefill?.lockFields;
-  const [gpuCount, setGpuCount]   = useState(locked ? "1" : "");
+  const [gpuCount, setGpuCount]   = useState(locked ? (prefill?.gpuCount?.toString()||"1") : "");
   const [dateStr, setDateStr]     = useState(prefill?.startDate || new Date().toISOString().slice(0,10));
   const [timeStr, setTimeStr]     = useState(prefill?.startTime || "09:00");
-  const [duration, setDuration]   = useState(locked ? 1 : 4);
+  const [duration, setDuration]   = useState(locked ? (prefill?.duration||1) : 4);
   const [saving, setSaving]       = useState(false);
   const [err, setErr]             = useState("");
   const isPhD   = matchPhD(name, roster);
@@ -467,6 +471,9 @@ function ReserveModal({ roster, projects, partitions, servers, reservations, pre
     : [];
 
   const handleConfirm = async () => {
+    if (!gpuCount || parseInt(gpuCount) < 1) {
+      setErr("GPU count must be at least 1"); return;
+    }
     setSaving(true); setErr("");
     try {
       await onConfirm({
@@ -566,7 +573,7 @@ function ReserveModal({ roster, projects, partitions, servers, reservations, pre
           </Field>
           <Field label="Hours" noMargin>
             {locked ? (
-              <div style={{width:"100%", padding:"8px 6px", fontSize:13, border:"0.5px solid var(--border)", borderRadius:8, background:"var(--surface)", color:"var(--muted2)", textAlign:"center", userSelect:"none", boxSizing:"border-box"}}>1 h</div>
+              <div style={{width:"100%", padding:"8px 6px", fontSize:13, border:"0.5px solid var(--border)", borderRadius:8, background:"var(--surface)", color:"var(--muted2)", textAlign:"center", userSelect:"none", boxSizing:"border-box"}}>{duration} h</div>
             ) : (
               <input type="number" min={0.5} max={48} step={0.5} value={duration}
                 onChange={e=>setDuration(parseFloat(e.target.value)||1)} style={{width:"100%",...inp(),padding:"8px 6px",fontSize:13}}/>
@@ -574,7 +581,7 @@ function ReserveModal({ roster, projects, partitions, servers, reservations, pre
           </Field>
           <Field label="GPU no." noMargin>
             {locked ? (
-              <div style={{width:"100%", padding:"8px 6px", fontSize:13, border:"0.5px solid var(--border)", borderRadius:8, background:"var(--surface)", color:"var(--muted2)", textAlign:"center", userSelect:"none", boxSizing:"border-box"}}>1</div>
+              <div style={{width:"100%", padding:"8px 6px", fontSize:13, border:"0.5px solid var(--border)", borderRadius:8, background:"var(--surface)", color:"var(--muted2)", textAlign:"center", userSelect:"none", boxSizing:"border-box"}}>{gpuCount}</div>
             ) : (
               <input type="number" min={1} max={64} value={gpuCount}
                 onChange={e=>setGpuCount(e.target.value)} placeholder="—" style={{width:"100%",...inp(),padding:"8px 6px",fontSize:13}}/>
@@ -767,6 +774,19 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
   const [dayOffset, setDayOffset]         = useState(0);
   const [popup, setPopup]                 = useState(null); // { partId, hour, x, y }
   const [cancelConfirm, setCancelConfirm] = useState(null); // { hrs, partId, hour }
+  const [drag, setDrag]                   = useState(null); // { partId, startH, startG, curH, curG, x, y, filled }
+  const dragRef                            = useRef(null);
+
+  // Drag bounds helper
+  const dragBounds = drag ? {
+    partId: drag.partId,
+    minH: Math.min(drag.startH, drag.curH), maxH: Math.max(drag.startH, drag.curH),
+    minG: Math.min(drag.startG, drag.curG), maxG: Math.max(drag.startG, drag.curG),
+  } : null;
+  const inDragSel = (partId, h, ri) => {
+    if (!dragBounds || dragBounds.partId !== partId) return false;
+    return h >= dragBounds.minH && h <= dragBounds.maxH && ri >= dragBounds.minG && ri <= dragBounds.maxG;
+  };
 
   const GPU_ROW_H_MIN = 18;
   const PART_LABEL_W  = 78;
@@ -914,7 +934,30 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
       </div>
 
       {/* ── Heatmap grid ── */}
-      <div style={{flex:1, overflow:"auto", display:"flex", flexDirection:"column"}}>
+      <div style={{flex:1, overflow:"auto", display:"flex", flexDirection:"column"}}
+        onMouseUp={() => {
+          if (!dragRef.current) return;
+          const { partId, startH, startG, curH, curG } = dragRef.current;
+          const minH = Math.min(startH, curH), maxH = Math.max(startH, curH);
+          const minG = Math.min(startG, curG), maxG = Math.max(startG, curG);
+          dragRef.current = null;
+          setDrag(null);
+
+          if (minH === maxH && minG === maxG) {
+            // Single click — cell's onClick handles popup
+            return;
+          }
+
+          // Drag selection → ReserveModal
+          const gpuCount = maxG - minG + 1;
+          const dur = maxH - minH + 1;
+          if (gpuCount < 1 || dur < 1) return;
+          const isoDate = new Date(dayStart).toISOString().slice(0, 10);
+          const startTime = `${String(minH).padStart(2, "0")}:00`;
+          onReserve({ infraType: "slurm", partitions: [partId], startDate: isoDate, startTime, gpuCount, duration: dur, lockFields: true });
+        }}
+        onMouseLeave={() => { dragRef.current = null; setDrag(null); }}
+      >
         <div style={{
           display:"grid",
           gridTemplateColumns,
@@ -922,6 +965,7 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
           width: gridTotalW,
           minHeight:"100%",
           flexShrink:0,
+          userSelect:"none",
         }}>
 
           {/* Header: corner cells + 24 hour labels */}
@@ -1016,34 +1060,47 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
                     const filled   = ri < clamped;
 
                     const isSelected = popup?.partId === p.id && popup?.hour === h && popup?.ri === ri;
+                    const isDragged  = inDragSel(p.id, h, ri);
 
                     return (
                       <div
                         key={`cell-${p.id}-${ri}-${h}`}
+                        onMouseDown={e => {
+                          const d = { partId: p.id, startH: h, startG: ri, curH: h, curG: ri };
+                          dragRef.current = d;
+                          setDrag(d);
+                        }}
                         onClick={e => {
                           e.stopPropagation();
-                          const rect   = e.currentTarget.getBoundingClientRect();
+                          const rect = e.currentTarget.getBoundingClientRect();
                           const popupW = 226;
-                          const xPos   = rect.right + popupW > window.innerWidth
+                          const xPos = rect.right + popupW > window.innerWidth
                             ? rect.left - popupW - 4
                             : rect.right + 4;
                           const yPos = Math.min(rect.top, window.innerHeight - 260);
                           setPopup({ partId: p.id, hour: h, ri, filled, x: xPos, y: yPos });
                         }}
+                        onMouseEnter={e => {
+                          if (dragRef.current && dragRef.current.partId === p.id) {
+                            const d = { ...dragRef.current, curH: h, curG: ri };
+                            dragRef.current = d;
+                            setDrag(d);
+                          }
+                        }}
                         style={{
                           gridRow: absRow, gridColumn: 3 + h,
                           boxSizing:"border-box",
-                          background: filled ? color.hex : "transparent",
+                          background: filled ? color.hex : (isDragged ? `${color.hex}33` : "transparent"),
                           opacity: filled ? 0.82 : 1,
                           borderLeft:"0.5px solid rgba(0,0,0,0.05)",
                           borderTop: rowTopBorder,
                           borderBottom: rowBotBorder,
                           cursor: "pointer",
                           transition:"opacity .12s",
-                          outline: isSelected ? `2px solid ${color.hex}` : "none",
+                          outline: isSelected ? `2px solid ${color.hex}` : isDragged ? `2px dashed ${color.hex}` : "none",
                           outlineOffset: "-1px",
                           position: "relative",
-                          zIndex: isSelected ? 3 : "auto",
+                          zIndex: (isSelected || isDragged) ? 3 : "auto",
                         }}
                       />
                     );
@@ -1152,7 +1209,7 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
                   if (cellFilled) return;
                   setPopup(null);
                   const isoDate = new Date(dayStart).toISOString().slice(0,10);
-                  onReserve({ infraType:"slurm", partitions:[popup.partId], startDate: isoDate, startTime: timeStr, lockFields: true });
+                  onReserve({ infraType:"slurm", partitions:[popup.partId], startDate: isoDate, startTime: timeStr, gpuCount: 1, duration: 1, lockFields: true });
                 }}
                 style={{
                   flex:1, padding:"7px 0", fontSize:12, fontWeight:500,
