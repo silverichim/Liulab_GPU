@@ -469,17 +469,24 @@ function ReserveModal({ roster, projects, partitions, servers, reservations, pre
   const conflicts = (dateStr && timeStr && duration)
     ? checkConflicts(infraType, selParts, serverId, startTs, endTs, gpuCount, reservations, partitions)
     : [];
+  const isPast = endTs <= now();
+  const isNow  = startTs <= now() && endTs > now();
 
   const handleConfirm = async () => {
     if (!gpuCount || parseInt(gpuCount) < 1) {
       setErr("GPU count must be at least 1"); return;
     }
+    if (isPast) {
+      setErr("Cannot reserve a time slot in the past"); return;
+    }
     setSaving(true); setErr("");
     try {
       await onConfirm({
         id:uid(), name:name.trim(), isPhD, project, infraType,
-        partitions:selParts, serverId, gpuCount: gpuCount || null,
-        startTime:startTs, endTime:endTs,
+        partitions: infraType === "slurm" ? selParts : null,
+        serverId: infraType === "server" ? serverId : null,
+        gpuCount: gpuCount || null,
+        startTime: isNow ? now() : startTs, endTime:endTs,
       });
     } catch(e) { setErr(e.message); setSaving(false); }
   };
@@ -527,21 +534,39 @@ function ReserveModal({ roster, projects, partitions, servers, reservations, pre
           </Field>
         )}
         {locked ? (
-          <Field label="Partition">
-            <div style={{
-              display:"flex", alignItems:"center", gap:8,
-              padding:"8px 12px", borderRadius:8,
-              background:"var(--surface)", border:"0.5px solid var(--border)",
-            }}>
-              <span style={{
-                fontSize:13, fontWeight:600, fontFamily:"monospace",
-                color: HEATMAP_COLORS[selParts[0]]?.hex || "var(--fg)",
+          infraType === "server" ? (
+            <Field label="Server">
+              <div style={{
+                display:"flex", alignItems:"center", gap:8,
+                padding:"8px 12px", borderRadius:8,
+                background:"var(--surface)", border:"0.5px solid var(--border)",
               }}>
-                {partitions.find(p=>p.id===selParts[0])?.name || selParts[0]}
-              </span>
-              <span style={{fontSize:11, color:"var(--muted2)"}}>— from selection</span>
-            </div>
-          </Field>
+                <span style={{
+                  fontSize:13, fontWeight:600, fontFamily:"monospace",
+                  color: SERVER_COLORS[servers.find(s=>s.id===serverId)?.name]?.hex || "var(--fg)",
+                }}>
+                  {servers.find(s=>s.id===serverId)?.name || serverId}
+                </span>
+                <span style={{fontSize:11, color:"var(--muted2)"}}>— from selection</span>
+              </div>
+            </Field>
+          ) : (
+            <Field label="Partition">
+              <div style={{
+                display:"flex", alignItems:"center", gap:8,
+                padding:"8px 12px", borderRadius:8,
+                background:"var(--surface)", border:"0.5px solid var(--border)",
+              }}>
+                <span style={{
+                  fontSize:13, fontWeight:600, fontFamily:"monospace",
+                  color: HEATMAP_COLORS[selParts[0]]?.hex || "var(--fg)",
+                }}>
+                  {partitions.find(p=>p.id===selParts[0])?.name || selParts[0]}
+                </span>
+                <span style={{fontSize:11, color:"var(--muted2)"}}>— from selection</span>
+              </div>
+            </Field>
+          )
         ) : infraType==="slurm" ? (
           <Field label="Partition">
             <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:6}}>
@@ -608,16 +633,33 @@ function ReserveModal({ roster, projects, partitions, servers, reservations, pre
           </div>
         )}
 
+        {/* Past time warning */}
+        {isPast && (
+          <div style={{marginTop:14,padding:"10px 14px",background:"#FCEBEB",border:"0.5px solid #fca5a5",borderRadius:8}}>
+            <div style={{fontSize:12,fontWeight:500,color:"#791F1F"}}>⛔ This time is in the past</div>
+            <div style={{fontSize:11,color:"#9B3C3C",marginTop:2}}>Please select a future date and time.</div>
+          </div>
+        )}
+
+        {/* Now-overlap info */}
+        {isNow && !isPast && (
+          <div style={{marginTop:14,padding:"10px 14px",background:"#E1F5EE",border:"0.5px solid #5DCAA5",borderRadius:8}}>
+            <div style={{fontSize:12,fontWeight:500,color:"#085041"}}>🟢 This time includes now — you'll be checked in immediately</div>
+            <div style={{fontSize:11,color:"#3C6B5A",marginTop:2}}>The start time will be set to the current moment.</div>
+          </div>
+        )}
+
         <div style={{display:"flex",gap:10,marginTop:16}}>
           <button onClick={onCancel} style={{flex:1,padding:"9px 0",fontSize:13,fontWeight:500,
             borderRadius:8,border:"0.5px solid var(--border)",background:"var(--surface)",
             color:"var(--muted)",cursor:"pointer"}}>Cancel</button>
-          <button disabled={!name.trim()||saving} onClick={handleConfirm} style={{
-            flex:2,padding:"9px 0",fontSize:13,fontWeight:500,borderRadius:8,cursor:"pointer",
-            border:`0.5px solid ${name.trim() ? (conflicts.length>0 ? "#EF9F27" : "#AFA9EC") : "var(--border)"}`,
-            background:name.trim() ? (conflicts.length>0 ? "#FAEEDA" : "#EEEDFE") : "var(--surface)",
-            color:name.trim() ? (conflicts.length>0 ? "#633806" : "#3C3489") : "var(--muted)"
-          }}>{saving?"Saving…": conflicts.length>0 ? "Reserve anyway" : "Reserve"}</button>
+          <button disabled={!name.trim()||saving||isPast} onClick={handleConfirm} style={{
+            flex:2,padding:"9px 0",fontSize:13,fontWeight:500,borderRadius:8,
+            cursor:(name.trim()&&!saving&&!isPast)?"pointer":"not-allowed",
+            border:`0.5px solid ${isPast?"var(--border)":name.trim()?(conflicts.length>0?"#EF9F27":"#AFA9EC"):"var(--border)"}`,
+            background:isPast?"var(--surface)":name.trim()?(conflicts.length>0?"#FAEEDA":(isNow?"#E1F5EE":"#EEEDFE")):"var(--surface)",
+            color:isPast?"var(--muted)":name.trim()?(conflicts.length>0?"#633806":(isNow?"#085041":"#3C3489")):"var(--muted)"
+          }}>{saving?"Saving…":isPast?"In the past":isNow?"✅ Check in now":conflicts.length>0?"Reserve anyway":"Reserve"}</button>
         </div>
       </div>
     </div>
@@ -627,14 +669,17 @@ function ReserveModal({ roster, projects, partitions, servers, reservations, pre
 // ─── Resource card ────────────────────────────────────────────────────────────
 // hideCheckin=true  → partition cards: always show Reserve, no Check in
 // hideCheckin=false → server cards:   show Check in + Reserve when free (original)
-function ResourceCard({ title, titleMono, hardware, note, gpuTotal, status, jobs, upcoming, onCheckin, onReserve, onCheckout, hideCheckin, partitionColor }) {
+function ResourceCard({ title, titleMono, hardware, note, gpuTotal, status, jobs, upcoming, currentReservations, onCheckin, onReserve, onCheckout, hideCheckin, partitionColor }) {
   const S = {
-    free: { dot:"#22c55e", label:"Free",     border:"var(--border)", bg:"var(--bg)" },
-    busy: { dot:"#f97316", label:"In use",   border:"#fed7aa",       bg:"#fff7ed"  },
-    over: { dot:"#ef4444", label:"Overtime", border:"#fca5a5",       bg:"#fef2f2"  },
+    free:     { dot:"#22c55e", label:"Free",      border:"var(--border)", bg:"var(--bg)"   },
+    busy:     { dot:"#f97316", label:"In use",    border:"#fed7aa",       bg:"#fff7ed"     },
+    over:     { dot:"#ef4444", label:"Overtime",  border:"#fca5a5",       bg:"#fef2f2"     },
+    reserved: { dot:"#534AB7", label:"Reserved",  border:"#AFA9EC",       bg:"#EEEDFE"     },
   };
   const s = S[status];
-  const usedGPU = jobs.reduce((a,j)=>a+(parseInt(j.gpuCount)||0),0);
+  const activeGPU = jobs.reduce((a,j)=>a+(parseInt(j.gpuCount)||0),0);
+  const reservedGPU = (currentReservations||[]).reduce((a,r)=>a+(parseInt(r.gpuCount)||0),0);
+  const usedGPU = activeGPU + reservedGPU;
   const pct = gpuTotal ? Math.min(Math.round((usedGPU/gpuTotal)*100),100) : 0;
   // When a partitionColor is provided, override bg/border with a tinted variant
   const cardBg     = partitionColor && status === "free" ? `${partitionColor}0D` : s.bg;
@@ -720,6 +765,22 @@ function ResourceCard({ title, titleMono, hardware, note, gpuTotal, status, jobs
         </div>
       ))}
 
+      {/* Current reservations (overlapping with now) */}
+      {(currentReservations||[]).map(r=>(
+        <div key={r.id} style={{marginBottom:8,padding:"8px 10px",background:"rgba(83,74,183,0.06)",borderRadius:8,border:"0.5px solid rgba(83,74,183,0.15)"}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexWrap:"wrap"}}>
+            <span style={{fontSize:13,fontWeight:500}}>{r.name}</span>
+            <PhdBadge show={r.isPhD}/>
+            <span style={{fontSize:10,fontWeight:500,padding:"2px 7px",borderRadius:20,
+              background:"#EEEDFE",color:"#3C3489",whiteSpace:"nowrap"}}>🕐 Reserved</span>
+          </div>
+          <div style={{fontSize:11,color:"var(--muted)"}}>
+            {r.project} · {fmt(r.startTime)} – {fmt(r.endTime)}
+            {r.gpuCount&&` · ${r.gpuCount} GPU`}
+          </div>
+        </div>
+      ))}
+
       {/* Upcoming reservation notice */}
       {upcoming && jobs.length === 0 && (
         <div style={{fontSize:11,color:"#534AB7",marginBottom:8}}>
@@ -769,8 +830,13 @@ const HEATMAP_COLORS = {
   "v100": { hex:"#A855F7" }, // purple
   "h200": { hex:"#22C55E" }, // green
 };
+const SERVER_COLORS = {
+  "lambda-01": { hex:"#0891B2" },
+  "lambda-02": { hex:"#EC4899" },
+  "lambda-03": { hex:"#F97316" },
+};
 
-function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onReserve }) {
+function HeatmapCalendar({ sessions, reservations, partitions, servers, onDeleteReservation, onReserve, onCheckout, onQuickCheckin }) {
   const [dayOffset, setDayOffset]         = useState(0);
   const [popup, setPopup]                 = useState(null); // { partId, hour, x, y }
   const [cancelConfirm, setCancelConfirm] = useState(null); // { hrs, partId, hour }
@@ -796,6 +862,13 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
 
   const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
+  const gridRef = useRef(null);
+  // Scroll to 8am on mount
+  useEffect(() => {
+    if (gridRef.current) {
+      gridRef.current.scrollLeft = PART_LABEL_W + GPU_LABEL_W + 5 * HOUR_COL_W;
+    }
+  }, []);
   // Close popup on Escape
   useEffect(() => {
     const onKey = (e) => {
@@ -813,34 +886,59 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
   const isToday  = dayOffset === 0;
   const dateLabel = `${MONTH_NAMES[displayDate.getMonth()]} ${String(displayDate.getDate()).padStart(2,"0")} ${displayDate.getFullYear()}`;
 
-  // Reservations touching this day (slurm only)
-  const dayRes = reservations.filter(r =>
-    r.infraType === "slurm" && r.startTime < dayEnd && r.endTime > dayStart
-  );
+  // Reservations + sessions touching this day (all infra types)
+  const dayRes = [
+    ...reservations.filter(r =>
+      r.startTime < dayEnd && r.endTime > dayStart
+    ),
+    // Active sessions (check-ins) as virtual reservations for heatmap coloring
+    ...(sessions||[]).filter(s =>
+      !s.endTime && s.startTime < dayEnd
+    ).map(s => ({
+      ...s,
+      endTime: s.plannedEnd || now(),
+      _isSession: true,
+    })),
+  ];
 
-  const getReservedCount = (partId, hour) => {
+  const getReservedCount = (partId, hour, _type) => {
     const hStart = dayStart + hour * 3600000;
     const hEnd   = hStart + 3600000;
     return dayRes
-      .filter(r => (r.partitions||[]).includes(partId) && r.startTime < hEnd && r.endTime > hStart)
+      .filter(r => {
+        if (_type === "server") return r.serverId === partId && r.startTime < hEnd && r.endTime > hStart;
+        return (r.partitions||[]).includes(partId) && r.startTime < hEnd && r.endTime > hStart;
+      })
       .reduce((sum, r) => sum + (parseInt(r.gpuCount)||0), 0);
   };
 
-  const getHourRes = (partId, hour) => {
+  const getHourRes = (partId, hour, _type) => {
     const hStart = dayStart + hour * 3600000;
     const hEnd   = hStart + 3600000;
-    return dayRes.filter(r =>
-      (r.partitions||[]).includes(partId) && r.startTime < hEnd && r.endTime > hStart
-    );
+    return dayRes.filter(r => {
+      if (_type === "server") return r.serverId === partId && r.startTime < hEnd && r.endTime > hStart;
+      return (r.partitions||[]).includes(partId) && r.startTime < hEnd && r.endTime > hStart;
+    });
   };
 
-  // Compute absolute grid rows per partition (1-indexed; row 1 = header)
+  // Compute absolute grid rows (1-indexed; row 1 = header)
   let rowCursor = 2;
   const partRows = partitions.map(p => {
     const rowStart = rowCursor;
     rowCursor += (p.gpuTotal || 0);
-    return { ...p, rowStart, rowEnd: rowCursor };
+    return { ...p, rowStart, rowEnd: rowCursor, _type: "partition" };
   });
+  // Independent servers: one row per GPU (serverId as row key for matching)
+  const serverRows = (servers||[]).map(s => {
+    const rowStart = rowCursor;
+    rowCursor += 1;
+    return {
+      id: s.id, name: `${s.name} / ${s.gpu}`, gpuTotal: 1,
+      hardware: s.spec, _colorName: s.name,
+      rowStart, rowEnd: rowCursor, _type: "server", _isServer: true,
+    };
+  });
+  const allPartRows = [...partRows, ...serverRows];
   const totalDataRows = rowCursor - 2;
 
   // CSS-only fill: minmax lets rows shrink to GPU_ROW_H_MIN but stretch via 1fr to fill height
@@ -918,6 +1016,17 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
             </div>
           );
         })}
+        {serverRows.map(p => {
+          const c = SERVER_COLORS[p._colorName] || { hex:"#999" };
+          return (
+            <div key={`svr-${p.id}`} style={{display:"flex", alignItems:"center", gap:5}}>
+              <div style={{width:12, height:12, borderRadius:2, background:c.hex}}/>
+              <span style={{fontSize:11, fontWeight:600, fontFamily:"monospace",
+                color:"var(--muted)"}}>{p.name}</span>
+              <span style={{fontSize:10, color:"var(--muted2)"}}>{p.hardware}</span>
+            </div>
+          );
+        })}
         <div style={{
           marginLeft:"auto", display:"flex", alignItems:"center",
           gap:3, fontSize:10, color:"var(--muted2)",
@@ -934,7 +1043,7 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
       </div>
 
       {/* ── Heatmap grid ── */}
-      <div style={{flex:1, overflow:"auto", display:"flex", flexDirection:"column"}}
+      <div ref={gridRef} style={{flex:1, overflow:"auto", display:"flex", flexDirection:"column"}}
         onMouseUp={() => {
           if (!dragRef.current) return;
           const { partId, startH, startG, curH, curG } = dragRef.current;
@@ -954,7 +1063,12 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
           if (gpuCount < 1 || dur < 1) return;
           const isoDate = new Date(dayStart).toISOString().slice(0, 10);
           const startTime = `${String(minH).padStart(2, "0")}:00`;
-          onReserve({ infraType: "slurm", partitions: [partId], startDate: isoDate, startTime, gpuCount, duration: dur, lockFields: true });
+          const isSrvDrag = allPartRows.find(p=>p.id===partId)?._isServer;
+          if (isSrvDrag) {
+            onReserve({ infraType: "server", serverId: partId, startDate: isoDate, startTime, gpuCount: 1, duration: dur, lockFields: true });
+          } else {
+            onReserve({ infraType: "slurm", partitions: [partId], startDate: isoDate, startTime, gpuCount, duration: dur, lockFields: true });
+          }
         }}
         onMouseLeave={() => { dragRef.current = null; setDrag(null); }}
       >
@@ -1004,18 +1118,21 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
           ))}
 
           {/* Data rows */}
-          {partRows.flatMap(p => {
-            const color   = HEATMAP_COLORS[p.id] || { hex:"#888" };
+          {allPartRows.flatMap(p => {
+            const color   = p._isServer ? (SERVER_COLORS[p._colorName] || { hex:"#888" }) : (HEATMAP_COLORS[p.id] || { hex:"#888" });
             const gpuList = Array.from({length: p.gpuTotal || 0}, (_, i) => i);
-            const isFirstPart = p.rowStart === 2;
-            const partTopBorder = isFirstPart ? "none" : `1.5px solid ${color.hex}66`;
+            const isFirstRowEver = p.rowStart === 2;
+            const isFirstOfServerColor = p._isServer && !serverRows.slice(0, serverRows.indexOf(p)).some(sr => sr._colorName === p._colorName);
+            const partTopBorder = p._isServer
+              ? (isFirstOfServerColor ? `1.5px solid ${color.hex}66` : "none")
+              : isFirstRowEver ? "none" : `1.5px solid ${color.hex}66`;
 
             return [
-              // ── Partition label cell (spans all GPU rows for this partition) ──
+              // ── Label cell (spans all GPU rows for this resource) ──
               <div key={`lbl-${p.id}`} style={{
                 gridRow: `${p.rowStart} / ${p.rowEnd}`,
                 gridColumn: 1,
-                position:"sticky", left:0, zIndex:20,
+                position:"sticky", left:0, zIndex:25,
                 background: `${color.hex}14`,
                 borderRight:"0.5px solid var(--border)",
                 borderTop: partTopBorder,
@@ -1029,7 +1146,7 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
                 }}>{p.name}</div>
                 <div style={{
                   fontSize:9, color:"var(--muted2)", textAlign:"center",
-                }}>×{p.gpuTotal}</div>
+                }}>{p._isServer ? p.hardware : `×${p.gpuTotal}`}</div>
               </div>,
 
               // ── Per-GPU rows ──
@@ -1044,18 +1161,18 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
                   // GPU index label
                   <div key={`gpu-${p.id}-${ri}`} style={{
                     gridRow: absRow, gridColumn: 2,
-                    position:"sticky", left: PART_LABEL_W, zIndex:19,
+                    position:"sticky", left: PART_LABEL_W, zIndex:24,
                     background:"var(--surface)",
                     borderRight:"0.5px solid var(--border)",
                     borderTop: rowTopBorder, borderBottom: rowBotBorder,
                     display:"flex", alignItems:"center", justifyContent:"center",
                     boxSizing:"border-box",
                     fontSize:9, color:"var(--muted2)", fontFamily:"monospace",
-                  }}>G{ri + 1}</div>,
+                  }}>{p._isServer ? `GPU ${ri}` : `G${ri + 1}`}</div>,
 
                   // 24 hour cells
                   ...Array.from({length:24}, (_, h) => {
-                    const reserved = getReservedCount(p.id, h);
+                    const reserved = getReservedCount(p.id, h, p._type);
                     const clamped  = Math.min(reserved, p.gpuTotal);
                     const filled   = ri < clamped;
 
@@ -1114,12 +1231,11 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
 
       {/* ── Cell popup ── */}
       {popup && (() => {
-        const part    = partitions.find(p => p.id === popup.partId);
-        const color   = HEATMAP_COLORS[popup.partId] || { hex:"#888" };
-        const hrs     = getHourRes(popup.partId, popup.hour);
+        const part    = allPartRows.find(p => p.id === popup.partId) || partitions.find(p => p.id === popup.partId);
+        const _isSrv  = part?._isServer;
+        const color   = _isSrv ? (SERVER_COLORS[part?._colorName] || { hex:"#888" }) : (HEATMAP_COLORS[popup.partId] || { hex:"#888" });
+        const hrs     = getHourRes(popup.partId, popup.hour, part?._type);
         const hasRes  = hrs.length > 0;
-        // button states: based on whether the clicked cell itself was filled
-        const cellFilled = popup.filled;
 
         const dateStr = (() => {
           const d = new Date(dayStart);
@@ -1171,10 +1287,33 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
                       <div style={{fontSize:12, fontWeight:500, color:"var(--fg)"}}>
                         {r.name}{r.gpuCount ? <span style={{color:"var(--muted2)", fontWeight:400}}> · {r.gpuCount} GPU</span> : ""}
                       </div>
+                      {r._isSession ? (
+                        <span style={{fontSize:9,fontWeight:500,padding:"1px 6px",borderRadius:10,
+                          background:"#E1F5EE",color:"#085041",whiteSpace:"nowrap"}}>🟢 Active</span>
+                      ) : (
+                        <span style={{fontSize:9,fontWeight:500,padding:"1px 6px",borderRadius:10,
+                          background:"#EEEDFE",color:"#3C3489",whiteSpace:"nowrap"}}>🕐 Reserved</span>
+                      )}
                     </div>
-                    <div style={{fontSize:10, color:"var(--muted2)"}}>
-                      {fmt(r.startTime)} – {fmt(r.endTime)}
+                    <div style={{fontSize:10, color:"var(--muted2)", marginBottom: r._isSession ? 6 : 0}}>
+                      {fmt(r.startTime)} – {r._isSession ? (r.endTime > now() ? fmt(r.endTime) : "now") : fmt(r.endTime)}
                     </div>
+                    {r._isSession && (
+                      <button onClick={() => { onCheckout(r.id); setPopup(null); }}
+                        style={{
+                          width:"100%", padding:"4px 0", fontSize:11, fontWeight:500,
+                          borderRadius:6, cursor:"pointer", fontFamily:"inherit",
+                          background:"#FCEBEB", color:"#791F1F", border:"0.5px solid #fca5a5",
+                        }}>Check out</button>
+                    )}
+                    {!r._isSession && r.startTime <= now() && r.endTime >= now() && (
+                      <button onClick={() => { onQuickCheckin(r); setPopup(null); }}
+                        style={{
+                          width:"100%", padding:"4px 0", fontSize:11, fontWeight:500,
+                          borderRadius:6, cursor:"pointer", fontFamily:"inherit",
+                          background:"#E1F5EE", color:"#085041", border:"0.5px solid #5DCAA5",
+                        }}>✅ Check in now</button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1187,39 +1326,51 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
 
             {/* CTA buttons */}
             <div style={{display:"flex", gap:7}}>
-              <button
-                disabled={!cellFilled}
-                onClick={() => {
-                  if (!cellFilled) return;
-                  setCancelConfirm({ hrs, partId: popup.partId, hour: popup.hour });
-                  setPopup(null);
-                }}
-                style={{
-                  flex:1, padding:"7px 0", fontSize:12, fontWeight:500,
-                  borderRadius:7, cursor: cellFilled ? "pointer" : "not-allowed",
-                  border: cellFilled ? "0.5px solid #fca5a5" : "0.5px solid var(--border)",
-                  background: cellFilled ? "#FCEBEB" : "var(--surface)",
-                  color: cellFilled ? "#791F1F" : "var(--muted)",
-                  opacity: cellFilled ? 1 : 0.45,
-                  fontFamily:"inherit",
-                }}>Cancel</button>
-              <button
-                disabled={cellFilled}
-                onClick={() => {
-                  if (cellFilled) return;
-                  setPopup(null);
-                  const isoDate = new Date(dayStart).toISOString().slice(0,10);
-                  onReserve({ infraType:"slurm", partitions:[popup.partId], startDate: isoDate, startTime: timeStr, gpuCount: 1, duration: 1, lockFields: true });
-                }}
-                style={{
-                  flex:1, padding:"7px 0", fontSize:12, fontWeight:500,
-                  borderRadius:7, cursor: !cellFilled ? "pointer" : "not-allowed",
-                  border: !cellFilled ? `0.5px solid ${color.hex}88` : "0.5px solid var(--border)",
-                  background: !cellFilled ? `${color.hex}18` : "var(--surface)",
-                  color: !cellFilled ? color.hex : "var(--muted)",
-                  opacity: !cellFilled ? 1 : 0.45,
-                  fontFamily:"inherit",
-                }}>Reserve</button>
+              {(() => {
+                const hasSession = hrs.some(r=>r._isSession);
+                const hasReservation = hrs.some(r=>!r._isSession);
+                return (
+                  <>
+                    <button
+                      disabled={!hasReservation}
+                      onClick={() => {
+                        if (!hasReservation) return;
+                        setCancelConfirm({ hrs: hrs.filter(r=>!r._isSession), partId: popup.partId, hour: popup.hour });
+                        setPopup(null);
+                      }}
+                      style={{
+                        flex:1, padding:"7px 0", fontSize:12, fontWeight:500,
+                        borderRadius:7, cursor: hasReservation ? "pointer" : "not-allowed",
+                        border: hasReservation ? "0.5px solid #fca5a5" : "0.5px solid var(--border)",
+                        background: hasReservation ? "#FCEBEB" : "var(--surface)",
+                        color: hasReservation ? "#791F1F" : "var(--muted)",
+                        opacity: hasReservation ? 1 : 0.45,
+                        fontFamily:"inherit",
+                      }}>{hasSession ? "Cancel reservations" : "Cancel"}</button>
+                    <button
+                      disabled={hasReservation || hasSession}
+                      onClick={() => {
+                        if (hasReservation || hasSession) return;
+                        setPopup(null);
+                        const isoDate = new Date(dayStart).toISOString().slice(0,10);
+                        if (_isSrv) {
+                          onReserve({infraType:"server", serverId: popup.partId, startDate: isoDate, startTime: timeStr, lockFields: true});
+                        } else {
+                          onReserve({infraType:"slurm", partitions:[popup.partId], startDate: isoDate, startTime: timeStr, lockFields: true});
+                        }
+                      }}
+                      style={{
+                        flex:1, padding:"7px 0", fontSize:12, fontWeight:500,
+                        borderRadius:7, cursor: (!hasReservation && !hasSession) ? "pointer" : "not-allowed",
+                        border: (!hasReservation && !hasSession) ? `0.5px solid ${color.hex}88` : "0.5px solid var(--border)",
+                        background: (!hasReservation && !hasSession) ? `${color.hex}18` : "var(--surface)",
+                        color: (!hasReservation && !hasSession) ? color.hex : "var(--muted)",
+                        opacity: (!hasReservation && !hasSession) ? 1 : 0.45,
+                        fontFamily:"inherit",
+                      }}>Reserve</button>
+                  </>
+                );
+              })()}
             </div>
           </div>
         );
@@ -1227,8 +1378,9 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
 
       {/* ── Cancel confirmation modal ── */}
       {cancelConfirm && (() => {
-        const part  = partitions.find(p => p.id === cancelConfirm.partId);
-        const color = HEATMAP_COLORS[cancelConfirm.partId] || { hex:"#888" };
+        const part  = allPartRows.find(p => p.id === cancelConfirm.partId) || partitions.find(p => p.id === cancelConfirm.partId);
+        const _isCs = part?._isServer;
+        const color = _isCs ? (SERVER_COLORS[part?._colorName] || { hex:"#888" }) : (HEATMAP_COLORS[cancelConfirm.partId] || { hex:"#888" });
         const confirmDateLabel = (() => {
           const d = new Date(dayStart);
           return `${MONTH_NAMES[d.getMonth()]} ${String(d.getDate()).padStart(2,"0")} ${d.getFullYear()}`;
@@ -1318,12 +1470,13 @@ function HeatmapCalendar({ reservations, partitions, onDeleteReservation, onRese
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-function Dashboard({ sessions, reservations, partitions, servers, onCheckin, onCheckout, onReserve, onDeleteReservation }) {
+function Dashboard({ sessions, reservations, partitions, servers, onCheckin, onCheckout, onReserve, onDeleteReservation, onQuickCheckin }) {
   const [tick, setTick] = useState(0);
   useEffect(()=>{const t=setInterval(()=>setTick(x=>x+1),30000);return()=>clearInterval(t);},[]);
 
   const activeFor   = (f) => sessions.filter(s=>!s.endTime&&f(s));
   const upcomingFor = (f) => reservations.filter(r=>r.startTime>now()&&f(r)).sort((a,b)=>a.startTime-b.startTime)[0];
+  const currentResFor = (f) => reservations.filter(r => r.startTime <= now() && r.endTime >= now() && f(r));
 
   return (
     <div style={{display:"flex", gap:20, alignItems:"flex-start"}}>
@@ -1369,11 +1522,12 @@ function Dashboard({ sessions, reservations, partitions, servers, onCheckin, onC
           {partitions.map(p=>{
             const jobs = activeFor(s=>s.infraType==="slurm"&&(s.partitions||[]).includes(p.id));
             const upcoming = upcomingFor(r=>r.infraType==="slurm"&&(r.partitions||[]).includes(p.id));
+            const curRes = currentResFor(r=>r.infraType==="slurm"&&(r.partitions||[]).includes(p.id));
             const hasOver  = jobs.some(j=>j.plannedEnd&&now()>j.plannedEnd);
-            const status   = jobs.length===0?"free":hasOver?"over":"busy";
+            const status   = jobs.length===0 ? (curRes.length>0 ? "reserved" : "free") : hasOver ? "over" : "busy";
             return <ResourceCard key={p.id} title={p.name} titleMono
               hardware={p.hardware||null} note={p.note||null}
-              gpuTotal={p.gpuTotal} status={status} jobs={jobs} upcoming={upcoming}
+              gpuTotal={p.gpuTotal} status={status} jobs={jobs} upcoming={upcoming} currentReservations={curRes}
               onCheckin={()=>onCheckin({infraType:"slurm",partitions:[p.id]})}
               onReserve={()=>onReserve({infraType:"slurm",partitions:[p.id]})}
               onCheckout={onCheckout}
@@ -1389,11 +1543,12 @@ function Dashboard({ sessions, reservations, partitions, servers, onCheckin, onC
           {servers.map(s=>{
             const jobs = activeFor(j=>j.infraType==="server"&&j.serverId===s.id);
             const upcoming = upcomingFor(r=>r.infraType==="server"&&r.serverId===s.id);
+            const curRes = currentResFor(r=>r.infraType==="server"&&r.serverId===s.id);
             const hasOver  = jobs.some(j=>j.plannedEnd&&now()>j.plannedEnd);
-            const status   = jobs.length===0?"free":hasOver?"over":"busy";
+            const status   = jobs.length===0 ? (curRes.length>0 ? "reserved" : "free") : hasOver ? "over" : "busy";
             return <ResourceCard key={s.id} title={`${s.name} / ${s.gpu}`} titleMono
               hardware={s.spec||null} note={null} gpuTotal={null}
-              status={status} jobs={jobs} upcoming={upcoming}
+              status={status} jobs={jobs} upcoming={upcoming} currentReservations={curRes}
               onCheckin={()=>onCheckin({infraType:"server",serverId:s.id})}
               onReserve={()=>onReserve({infraType:"server",serverId:s.id})}
               onCheckout={onCheckout}
@@ -1408,10 +1563,14 @@ function Dashboard({ sessions, reservations, partitions, servers, onCheckin, onC
         position:"sticky", top:57,
       }}>
         <HeatmapCalendar
+          sessions={sessions}
           reservations={reservations}
           partitions={partitions}
+          servers={servers}
           onDeleteReservation={onDeleteReservation}
           onReserve={onReserve}
+          onCheckout={onCheckout}
+          onQuickCheckin={onQuickCheckin}
         />
       </div>
 
@@ -1839,14 +1998,49 @@ export default function App() {
     load();
   };
   const handleReserveConfirm = async (data) => {
-    await db.insertReservation(data);
-    setReservations(r=>[...r,data]);
+    if (data.startTime <= now() + 5000 && data.endTime > now()) {
+      // Time includes now → create as session (check-in) instead
+      const session = {
+        id: uid(), name: data.name, isPhD: data.isPhD,
+        project: data.project, priority: "normal",
+        infraType: data.infraType,
+        partitions: data.partitions, serverId: data.serverId,
+        jobType: "gpu", gpuCount: data.gpuCount || 1,
+        cpuCount: null, memGB: null,
+        startTime: now(), plannedEnd: data.endTime, endTime: null,
+        description: "Auto check-in from reservation (time includes now)",
+        slurmJobId: null, node: null, scriptPath: null, outputDir: null,
+      };
+      await db.insertSession(session);
+      setSessions(s=>[session,...s]);
+    } else {
+      await db.insertReservation(data);
+      setReservations(r=>[...r,data]);
+    }
     setShowReserve(false);
     load();
   };
   const handleDeleteReservation = async (id) => {
     await db.deleteReservation(id);
     setReservations(r=>r.filter(x=>x.id!==id));
+    load();
+  };
+  const handleQuickCheckin = async (reservation) => {
+    const session = {
+      id: uid(), name: reservation.name, isPhD: reservation.isPhD,
+      project: reservation.project, priority: "normal",
+      infraType: reservation.infraType,
+      partitions: reservation.partitions, serverId: reservation.serverId,
+      jobType: "gpu", gpuCount: reservation.gpuCount || 1,
+      cpuCount: null, memGB: null,
+      startTime: now(), plannedEnd: reservation.endTime, endTime: null,
+      description: `Auto check-in from reservation`,
+      slurmJobId: null, node: null, scriptPath: null, outputDir: null,
+    };
+    await db.insertSession(session);
+    setSessions(s=>[session,...s]);
+    await db.deleteReservation(reservation.id);
+    setReservations(r=>r.filter(x=>x.id!==reservation.id));
     load();
   };
 
@@ -1898,7 +2092,8 @@ export default function App() {
               onCheckin={p=>{setCheckinPre(p);setShowCheckin(true);}}
               onCheckout={handleCheckout}
               onReserve={p=>{setReservePre(p);setShowReserve(true);}}
-              onDeleteReservation={handleDeleteReservation}/>}
+              onDeleteReservation={handleDeleteReservation}
+              onQuickCheckin={handleQuickCheckin}/>}
             {tab==="history"&&<History sessions={sessions} servers={servers}
               onExport={()=>csvExport(sessions,servers)}/>}
             {tab==="stats"&&<Stats sessions={sessions}/>}
