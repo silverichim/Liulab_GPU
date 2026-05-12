@@ -884,6 +884,7 @@ function HeatmapCalendar({ sessions, reservations, partitions, servers, onDelete
   const dayStart = displayDate.getTime();
   const dayEnd   = dayStart + 86400000;
   const isToday  = dayOffset === 0;
+  const nowHour   = isToday ? new Date().getHours() : -1;
   const dateLabel = `${MONTH_NAMES[displayDate.getMonth()]} ${String(displayDate.getDate()).padStart(2,"0")} ${displayDate.getFullYear()}`;
 
   // Reservations + sessions touching this day (all infra types)
@@ -1105,12 +1106,13 @@ function HeatmapCalendar({ sessions, reservations, partitions, servers, onDelete
             <div key={h} style={{
               gridRow:1, gridColumn: 3 + h,
               position:"sticky", top:0, zIndex:30,
-              background:"var(--surface)",
+              background: isToday && h === nowHour ? "rgba(128,128,128,0.14)" : "var(--surface)",
               borderLeft:"0.5px solid var(--border)",
               borderBottom:"0.5px solid var(--border)",
               display:"flex", flexDirection:"column",
               alignItems:"center", justifyContent:"center",
-              fontSize:9, color:"var(--muted2)", lineHeight:1.4, userSelect:"none",
+              fontSize:9, color: isToday && h === nowHour ? "var(--fg)" : "var(--muted2)",
+              lineHeight:1.4, userSelect:"none", fontWeight: isToday && h === nowHour ? 700 : 400,
             }}>
               <span style={{fontWeight:700}}>{String(h).padStart(2,"0")}:00</span>
               <span style={{opacity:0.7}}>{h < 12 ? "AM" : "PM"}</span>
@@ -1178,6 +1180,8 @@ function HeatmapCalendar({ sessions, reservations, partitions, servers, onDelete
 
                     const isSelected = popup?.partId === p.id && popup?.hour === h && popup?.ri === ri;
                     const isDragged  = inDragSel(p.id, h, ri);
+                    const isNowCol   = isToday && h === nowHour;
+                    const cellBg     = filled ? color.hex : (isDragged ? `${color.hex}33` : "transparent");
 
                     return (
                       <div
@@ -1207,7 +1211,9 @@ function HeatmapCalendar({ sessions, reservations, partitions, servers, onDelete
                         style={{
                           gridRow: absRow, gridColumn: 3 + h,
                           boxSizing:"border-box",
-                          background: filled ? color.hex : (isDragged ? `${color.hex}33` : "transparent"),
+                          background: isNowCol
+                            ? `linear-gradient(rgba(128,128,128,0.08), rgba(128,128,128,0.08)), ${cellBg}`
+                            : cellBg,
                           opacity: filled ? 0.82 : 1,
                           borderLeft:"0.5px solid rgba(0,0,0,0.05)",
                           borderTop: rowTopBorder,
