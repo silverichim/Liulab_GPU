@@ -1830,20 +1830,24 @@ export default function App() {
     await db.insertSession(data);
     setSessions(s=>[data,...s]);
     setShowCheckin(false);
+    load();
   };
   const handleCheckout = async (id) => {
     const endTime = now();
     await db.updateSession(id, {end_time: endTime});
     setSessions(s=>s.map(x=>x.id===id?{...x,endTime}:x));
+    load();
   };
   const handleReserveConfirm = async (data) => {
     await db.insertReservation(data);
     setReservations(r=>[...r,data]);
     setShowReserve(false);
+    load();
   };
   const handleDeleteReservation = async (id) => {
     await db.deleteReservation(id);
     setReservations(r=>r.filter(x=>x.id!==id));
+    load();
   };
 
   const TABS = [{id:"dashboard",label:"Dashboard"},{id:"history",label:"History"},
