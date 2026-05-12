@@ -1998,27 +1998,33 @@ export default function App() {
     load();
   };
   const handleReserveConfirm = async (data) => {
-    if (data.startTime <= now() + 5000 && data.endTime > now()) {
-      // Time includes now → create as session (check-in) instead
-      const session = {
-        id: uid(), name: data.name, isPhD: data.isPhD,
-        project: data.project, priority: "normal",
-        infraType: data.infraType,
-        partitions: data.partitions, serverId: data.serverId,
-        jobType: "gpu", gpuCount: data.gpuCount || 1,
-        cpuCount: null, memGB: null,
-        startTime: now(), plannedEnd: data.endTime, endTime: null,
-        description: "Auto check-in from reservation (time includes now)",
-        slurmJobId: null, node: null, scriptPath: null, outputDir: null,
-      };
-      await db.insertSession(session);
-      setSessions(s=>[session,...s]);
-    } else {
-      await db.insertReservation(data);
-      setReservations(r=>[...r,data]);
+    try {
+      if (data.startTime <= now() + 5000 && data.endTime > now()) {
+        // Time includes now → create as session (check-in) instead
+        const session = {
+          id: uid(), name: data.name, isPhD: data.isPhD,
+          project: data.project, priority: "normal",
+          infraType: data.infraType,
+          partitions: data.partitions, serverId: data.serverId,
+          jobType: "gpu", gpuCount: data.gpuCount || 1,
+          cpuCount: null, memGB: null,
+          startTime: now(), plannedEnd: data.endTime, endTime: null,
+          description: "Auto check-in from reservation (time includes now)",
+          slurmJobId: null, node: null, scriptPath: null, outputDir: null,
+        };
+        await db.insertSession(session);
+        setSessions(s=>[session,...s]);
+      } else {
+        await db.insertReservation(data);
+        setReservations(r=>[...r,data]);
+      }
+      setShowReserve(false);
+    } catch (e) {
+      alert("Reservation failed: " + e.message);
+      // Keep modal open so user can retry
+    } finally {
+      load();
     }
-    setShowReserve(false);
-    load();
   };
   const handleDeleteReservation = async (id) => {
     await db.deleteReservation(id);
@@ -2037,11 +2043,19 @@ export default function App() {
       description: `Auto check-in from reservation`,
       slurmJobId: null, node: null, scriptPath: null, outputDir: null,
     };
-    await db.insertSession(session);
-    setSessions(s=>[session,...s]);
-    await db.deleteReservation(reservation.id);
-    setReservations(r=>r.filter(x=>x.id!==reservation.id));
-    load();
+    try {
+      await db.insertSession(session);
+      setSessions(s=>[session,...s]);
+      await db.deleteReservation(reservation.id);
+      setReservations(r=>r.filter(x=>x.id!==reservation.id));
+    } catch (e) {
+      // Rollback: if session was inserted but delete failed, undo
+      try { await db.updateSession(session.id, {end_time: now()}); } catch {}
+      setSessions(s => s.filter(x => x.id !== session.id));
+      alert("Quick check-in failed: " + e.message);
+    } finally {
+      load();
+    }
   };
 
   const TABS = [{id:"dashboard",label:"Dashboard"},{id:"history",label:"History"},
