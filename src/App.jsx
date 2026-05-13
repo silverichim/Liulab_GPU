@@ -62,12 +62,14 @@ const toDbRes = (r) => ({
   infra_type: r.infraType, partitions: r.partitions, server_id: r.serverId,
   start_time: r.startTime, end_time: r.endTime,
   gpu_count: r.gpuCount ? parseInt(r.gpuCount) : null,
+  gpu_slot: r.gpuSlot != null ? r.gpuSlot : null,
 });
 const fromDbRes = (r) => ({
   id: r.id, name: r.name, isPhD: r.is_phd, project: r.project,
   infraType: r.infra_type, partitions: r.partitions || [], serverId: r.server_id,
   startTime: r.start_time, endTime: r.end_time,
   gpuCount: r.gpu_count,
+  gpuSlot: r.gpu_slot,
 });
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -407,10 +409,43 @@ function CheckInModal({ roster, projects, partitions, servers, prefill, onConfir
   );
 }
 
-// ─── Conflict detection helpers ──────────────────────────────────────────────
 function timeOverlap(aStart, aEnd, bStart, bEnd) {
   return aStart < bEnd && aEnd > bStart;
 }
+
+// Find the best GPU slot for a new reservation, given existing ones with slots.
+// Returns the first non-overlapping slot; falls back to least-congested.
+function findSlotForReservation(newRes, existing, gpuTotal) {
+  const gpuCount = Math.max(1, parseInt(newRes.gpuCount) || 1);
+  const maxSlot  = gpuTotal - gpuCount;
+  if (maxSlot < 0) return 0;
+  const conflictsWith = (slot) => existing.some(r => {
+    if (r.gpuSlot == null) return false;
+    const rSlot  = r.gpuSlot;
+    const rCount = Math.max(1, parseInt(r.gpuCount) || 1);
+    if (slot + gpuCount <= rSlot || rSlot + rCount <= slot) return false; // no slot overlap
+    return timeOverlap(newRes.startTime, newRes.endTime, r.startTime, r.endTime);
+  });
+  // First pass: perfect fit (zero conflicts)
+  for (let slot = 0; slot <= maxSlot; slot++) {
+    if (!conflictsWith(slot)) return slot;
+  }
+  // Fallback: fewest conflicts
+  let best = 0, bestN = Infinity;
+  for (let slot = 0; slot <= maxSlot; slot++) {
+    const n = existing.filter(r => {
+      if (r.gpuSlot == null) return false;
+      const rSlot  = r.gpuSlot;
+      const rCount = Math.max(1, parseInt(r.gpuCount) || 1);
+      if (slot + gpuCount <= rSlot || rSlot + rCount <= slot) return false;
+      return timeOverlap(newRes.startTime, newRes.endTime, r.startTime, r.endTime);
+    }).length;
+    if (n < bestN) { bestN = n; best = slot; }
+  }
+  return best;
+}
+
+// ─── Conflict detection helpers ──────────────────────────────────────────────
 
 function checkConflicts(infraType, selParts, serverId, startTs, endTs, gpuCount, reservations, partitions) {
   const warnings = [];
@@ -842,6 +877,7 @@ function HeatmapCalendar({ sessions, reservations, partitions, servers, onDelete
   const [cancelConfirm, setCancelConfirm] = useState(null); // { hrs, partId, hour }
   const [drag, setDrag]                   = useState(null); // { partId, startH, startG, curH, curG, x, y, filled }
   const dragRef                            = useRef(null);
+  const gridInnerRef                       = useRef(null);
 
   // Drag bounds helper
   const dragBounds = drag ? {
@@ -940,6 +976,60 @@ function HeatmapCalendar({ sessions, reservations, partitions, servers, onDelete
     };
   });
   const allPartRows = [...partRows, ...serverRows];
+
+  // Consistent GPU slot assignment — each reservation stays on the same GPU row
+  // across all hours it spans, preventing visual "hopping" when an earlier
+  // overlapping reservation ends.
+  const slotAssignments = (() => {
+    const map = {};
+    allPartRows.forEach(p => {
+      const entries = dayRes.filter(r => {
+        if (p._type === "server") return r.serverId === p.id;
+        return (r.partitions||[]).includes(p.id);
+      });
+      // Sort: active sessions first (preserve their slot), then by start time
+      const sorted = [...entries].sort((a, b) => {
+        if (a._isSession && !b._isSession) return -1;
+        if (!a._isSession && b._isSession) return 1;
+        return a.startTime - b.startTime;
+      });
+      const maxSlots = p.gpuTotal || 1;
+      const slots = {}; // ri → [entries]
+      for (const entry of sorted) {
+        const gpuCount = Math.max(1, parseInt(entry.gpuCount) || 1);
+        let assignSlot;
+
+        if (entry.gpuSlot != null && !entry._isSession && entry.gpuSlot <= maxSlots - gpuCount) {
+          // Persisted slot — use directly (reservation created after migration)
+          assignSlot = entry.gpuSlot;
+        } else {
+          // Dynamic assignment (sessions, or legacy reservations w/o persisted slot)
+          let bestSlot = 0, bestOverlap = Infinity;
+          for (let slot = 0; slot <= maxSlots - gpuCount; slot++) {
+            let maxOverlap = 0;
+            for (let g = 0; g < gpuCount; g++) {
+              const occupants = slots[slot + g] || [];
+              const n = occupants.filter(occ => timeOverlap(
+                entry.startTime, entry.endTime || now(),
+                occ.startTime, occ.endTime || now()
+              )).length;
+              maxOverlap = Math.max(maxOverlap, n);
+            }
+            if (maxOverlap === 0) { bestSlot = slot; break; } // perfect fit
+            if (maxOverlap < bestOverlap) { bestOverlap = maxOverlap; bestSlot = slot; }
+          }
+          assignSlot = bestSlot;
+        }
+
+        for (let g = 0; g < gpuCount; g++) {
+          if (!slots[assignSlot + g]) slots[assignSlot + g] = [];
+          slots[assignSlot + g].push(entry);
+        }
+      }
+      map[p.id] = slots;
+    });
+    return map;
+  })();
   const totalDataRows = rowCursor - 2;
 
   // CSS-only fill: minmax lets rows shrink to GPU_ROW_H_MIN but stretch via 1fr to fill height
@@ -969,6 +1059,32 @@ function HeatmapCalendar({ sessions, reservations, partitions, servers, onDelete
         height:"calc(100vh - 88px)",
       }}
       onClick={() => setPopup(null)}
+      onMouseUp={() => {
+        if (!dragRef.current) return;
+        const { partId, startH, startG, curH, curG } = dragRef.current;
+        const minH = Math.min(startH, curH), maxH = Math.max(startH, curH);
+        const minG = Math.min(startG, curG), maxG = Math.max(startG, curG);
+        dragRef.current = null;
+        setDrag(null);
+
+        if (minH === maxH && minG === maxG) {
+          // Single click — cell's onClick handles popup
+          return;
+        }
+
+        // Drag selection → ReserveModal
+        const gpuCount = maxG - minG + 1;
+        const dur = maxH - minH + 1;
+        if (gpuCount < 1 || dur < 1) return;
+        const isoDate = new Date(dayStart).toISOString().slice(0, 10);
+        const startTime = `${String(minH).padStart(2, "0")}:00`;
+        const isSrvDrag = allPartRows.find(p=>p.id===partId)?._isServer;
+        if (isSrvDrag) {
+          onReserve({ infraType: "server", serverId: partId, startDate: isoDate, startTime, gpuCount: 1, duration: dur, lockFields: true });
+        } else {
+          onReserve({ infraType: "slurm", partitions: [partId], startDate: isoDate, startTime, gpuCount, duration: dur, lockFields: true });
+        }
+      }}
     >
       {/* ── Title / day navigation ── */}
       <div style={{
@@ -1045,31 +1161,19 @@ function HeatmapCalendar({ sessions, reservations, partitions, servers, onDelete
 
       {/* ── Heatmap grid ── */}
       <div ref={gridRef} style={{flex:1, overflow:"auto", display:"flex", flexDirection:"column"}}
-        onMouseUp={() => {
+        onMouseMove={(e) => {
           if (!dragRef.current) return;
-          const { partId, startH, startG, curH, curG } = dragRef.current;
-          const minH = Math.min(startH, curH), maxH = Math.max(startH, curH);
-          const minG = Math.min(startG, curG), maxG = Math.max(startG, curG);
-          dragRef.current = null;
-          setDrag(null);
-
-          if (minH === maxH && minG === maxG) {
-            // Single click — cell's onClick handles popup
-            return;
-          }
-
-          // Drag selection → ReserveModal
-          const gpuCount = maxG - minG + 1;
-          const dur = maxH - minH + 1;
-          if (gpuCount < 1 || dur < 1) return;
-          const isoDate = new Date(dayStart).toISOString().slice(0, 10);
-          const startTime = `${String(minH).padStart(2, "0")}:00`;
-          const isSrvDrag = allPartRows.find(p=>p.id===partId)?._isServer;
-          if (isSrvDrag) {
-            onReserve({ infraType: "server", serverId: partId, startDate: isoDate, startTime, gpuCount: 1, duration: dur, lockFields: true });
-          } else {
-            onReserve({ infraType: "slurm", partitions: [partId], startDate: isoDate, startTime, gpuCount, duration: dur, lockFields: true });
-          }
+          const elem = document.elementFromPoint(e.clientX, e.clientY);
+          if (!elem) return;
+          const cell = elem.closest('[data-cell]');
+          if (!cell) return;
+          const cellPartId = cell.dataset.partId;
+          const h = parseInt(cell.dataset.h);
+          const ri = parseInt(cell.dataset.ri);
+          if (cellPartId !== dragRef.current.partId) return;
+          const d = { ...dragRef.current, curH: h, curG: ri };
+          dragRef.current = d;
+          setDrag(d);
         }}
         onMouseLeave={() => { dragRef.current = null; setDrag(null); }}
       >
@@ -1174,9 +1278,10 @@ function HeatmapCalendar({ sessions, reservations, partitions, servers, onDelete
 
                   // 24 hour cells
                   ...Array.from({length:24}, (_, h) => {
-                    const reserved = getReservedCount(p.id, h, p._type);
-                    const clamped  = Math.min(reserved, p.gpuTotal);
-                    const filled   = ri < clamped;
+                    const hStart = dayStart + h * 3600000;
+                    const hEnd   = hStart + 3600000;
+                    const slotEntries = (slotAssignments[p.id] || {})[ri] || [];
+                    const filled = slotEntries.some(e => e.startTime < hEnd && (e.endTime || e.plannedEnd || now()) > hStart);
 
                     const isSelected = popup?.partId === p.id && popup?.hour === h && popup?.ri === ri;
                     const isDragged  = inDragSel(p.id, h, ri);
@@ -1186,6 +1291,7 @@ function HeatmapCalendar({ sessions, reservations, partitions, servers, onDelete
                     return (
                       <div
                         key={`cell-${p.id}-${ri}-${h}`}
+                        data-cell="1" data-part-id={p.id} data-ri={ri} data-h={h}
                         onMouseDown={e => {
                           const d = { partId: p.id, startH: h, startG: ri, curH: h, curG: ri };
                           dragRef.current = d;
@@ -1200,13 +1306,6 @@ function HeatmapCalendar({ sessions, reservations, partitions, servers, onDelete
                             : rect.right + 4;
                           const yPos = Math.min(rect.top, window.innerHeight - 260);
                           setPopup({ partId: p.id, hour: h, ri, filled, x: xPos, y: yPos });
-                        }}
-                        onMouseEnter={e => {
-                          if (dragRef.current && dragRef.current.partId === p.id) {
-                            const d = { ...dragRef.current, curH: h, curG: ri };
-                            dragRef.current = d;
-                            setDrag(d);
-                          }
                         }}
                         style={{
                           gridRow: absRow, gridColumn: 3 + h,
@@ -1537,7 +1636,7 @@ function Dashboard({ sessions, reservations, partitions, servers, onCheckin, onC
               onCheckin={()=>onCheckin({infraType:"slurm",partitions:[p.id]})}
               onReserve={()=>onReserve({infraType:"slurm",partitions:[p.id]})}
               onCheckout={onCheckout}
-              hideCheckin={true}
+              hideCheckin={false}
               partitionColor={HEATMAP_COLORS[p.id]?.hex}/>;
           })}
         </div>
@@ -2021,6 +2120,20 @@ export default function App() {
         await db.insertSession(session);
         setSessions(s=>[session,...s]);
       } else {
+        // Assign a consistent GPU slot before persisting
+        if (data.infraType === "slurm") {
+          const partId = data.partitions?.[0];
+          if (partId) {
+            const part = partitions.find(p => p.id === partId);
+            const gpuTotal = part?.gpuTotal || 1;
+            const existing = reservations.filter(r =>
+              r.infraType === "slurm" && (r.partitions || []).includes(partId)
+            );
+            data = { ...data, gpuSlot: findSlotForReservation(data, existing, gpuTotal) };
+          }
+        } else {
+          data = { ...data, gpuSlot: 0 };
+        }
         await db.insertReservation(data);
         setReservations(r=>[...r,data]);
       }
